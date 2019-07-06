@@ -11,12 +11,14 @@ namespace BTCPayServer.Payments
     /// </summary>
     public class PaymentMethodId
     {
-        public PaymentMethodId(string cryptoCode, PaymentTypes paymentType)
+        public PaymentMethodId(string cryptoCode, PaymentType paymentType)
         {
             if (cryptoCode == null)
                 throw new ArgumentNullException(nameof(cryptoCode));
+            if (paymentType == null)
+                throw new ArgumentNullException(nameof(paymentType));
             PaymentType = paymentType;
-            CryptoCode = cryptoCode;
+            CryptoCode = cryptoCode.ToUpperInvariant();
         }
 
         [Obsolete("Should only be used for legacy stuff")]
@@ -29,7 +31,7 @@ namespace BTCPayServer.Payments
         }
 
         public string CryptoCode { get; private set; }
-        public PaymentTypes PaymentType { get; private set; }
+        public PaymentType PaymentType { get; private set; }
 
 
         public override bool Equals(object obj)
@@ -62,15 +64,35 @@ namespace BTCPayServer.Payments
 
         public override string ToString()
         {
-            if (PaymentType == PaymentTypes.BTCLike)
-                return CryptoCode;
-            return CryptoCode + "_" + PaymentType.ToString();
+            //BTCLike case is special because it is in legacy mode.
+            return PaymentType == PaymentTypes.BTCLike ? CryptoCode : $"{CryptoCode}_{PaymentType}";
         }
 
+        public string ToPrettyString()
+        {
+            return $"{CryptoCode} ({PaymentType.ToPrettyString()})";
+        }
+
+        public static bool TryParse(string str, out PaymentMethodId paymentMethodId)
+        {
+            paymentMethodId = null;
+            var parts = str.Split('_', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0 || parts.Length > 2)
+                return false;
+            PaymentType type = PaymentTypes.BTCLike;
+            if (parts.Length == 2)
+            {
+                if (!PaymentTypes.TryParse(parts[1], out type))
+                    return false;
+            }
+            paymentMethodId = new PaymentMethodId(parts[0], type);
+            return true;
+        }
         public static PaymentMethodId Parse(string str)
         {
-            var parts = str.Split('_');
-            return new PaymentMethodId(parts[0], parts.Length == 1 ? PaymentTypes.BTCLike : Enum.Parse<PaymentTypes>(parts[1]));
+            if (!TryParse(str, out var result))
+                throw new FormatException("Invalid PaymentMethodId");
+            return result;
         }
     }
 }

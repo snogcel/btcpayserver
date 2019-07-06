@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Net.Http;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Linq;
@@ -17,7 +18,7 @@ namespace BTCPayServer
 
         public BTCPayNetworkProvider NetworkProviders => _NetworkProviders;
         NBXplorerDashboard _Dashboard;
-        public ExplorerClientProvider(BTCPayNetworkProvider networkProviders, BTCPayServerOptions options, NBXplorerDashboard dashboard)
+        public ExplorerClientProvider(IHttpClientFactory httpClientFactory, BTCPayNetworkProvider networkProviders, BTCPayServerOptions options, NBXplorerDashboard dashboard)
         {
             _Dashboard = dashboard;
             _NetworkProviders = networkProviders;
@@ -32,14 +33,15 @@ namespace BTCPayServer
                 Logs.Configuration.LogInformation($"{setting.CryptoCode}: Cookie file is {(setting.CookieFile ?? "not set")}");
                 if (setting.ExplorerUri != null)
                 {
-                    _Clients.TryAdd(setting.CryptoCode, CreateExplorerClient(_NetworkProviders.GetNetwork(setting.CryptoCode), setting.ExplorerUri, setting.CookieFile));
+                    _Clients.TryAdd(setting.CryptoCode, CreateExplorerClient(httpClientFactory.CreateClient(nameof(ExplorerClientProvider)), _NetworkProviders.GetNetwork<BTCPayNetwork>(setting.CryptoCode), setting.ExplorerUri, setting.CookieFile));
                 }
             }
         }
 
-        private static ExplorerClient CreateExplorerClient(BTCPayNetwork n, Uri uri, string cookieFile)
+        private static ExplorerClient CreateExplorerClient(HttpClient httpClient, BTCPayNetwork n, Uri uri, string cookieFile)
         {
             var explorer = new ExplorerClient(n.NBXplorerNetwork, uri);
+            explorer.SetClient(httpClient);
             if (cookieFile == null)
             {
                 Logs.Configuration.LogWarning($"{n.CryptoCode}: Not using cookie authentication");
@@ -56,21 +58,21 @@ namespace BTCPayServer
 
         public ExplorerClient GetExplorerClient(string cryptoCode)
         {
-            var network = _NetworkProviders.GetNetwork(cryptoCode);
+            var network = _NetworkProviders.GetNetwork<BTCPayNetwork>(cryptoCode);
             if (network == null)
                 return null;
             _Clients.TryGetValue(network.CryptoCode, out ExplorerClient client);
             return client;
         }
 
-        public ExplorerClient GetExplorerClient(BTCPayNetwork network)
+        public ExplorerClient GetExplorerClient(BTCPayNetworkBase network)
         {
             if (network == null)
                 throw new ArgumentNullException(nameof(network));
             return GetExplorerClient(network.CryptoCode);
         }
 
-        public bool IsAvailable(BTCPayNetwork network)
+        public bool IsAvailable(BTCPayNetworkBase network)
         {
             return IsAvailable(network.CryptoCode);
         }
@@ -82,7 +84,7 @@ namespace BTCPayServer
 
         public BTCPayNetwork GetNetwork(string cryptoCode)
         {
-            var network = _NetworkProviders.GetNetwork(cryptoCode);
+            var network = _NetworkProviders.GetNetwork<BTCPayNetwork>(cryptoCode);
             if (network == null)
                 return null;
             if (_Clients.ContainsKey(network.CryptoCode))
@@ -92,7 +94,7 @@ namespace BTCPayServer
 
         public IEnumerable<(BTCPayNetwork, ExplorerClient)> GetAll()
         {
-            foreach (var net in _NetworkProviders.GetAll())
+            foreach (var net in _NetworkProviders.GetAll().OfType<BTCPayNetwork>())
             {
                 if (_Clients.TryGetValue(net.CryptoCode, out ExplorerClient explorer))
                 {

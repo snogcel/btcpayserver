@@ -11,7 +11,7 @@ namespace BTCPayServer.Payments.Bitcoin
 
     public class BitcoinLikePaymentData : CryptoPaymentData
     {
-        public PaymentTypes GetPaymentType()
+        public PaymentType GetPaymentType()
         {
             return PaymentTypes.BTCLike;
         }
@@ -27,11 +27,14 @@ namespace BTCPayServer.Payments.Bitcoin
             RBF = rbf;
         }
         [JsonIgnore]
+        public BTCPayNetworkBase Network { get; set; }
+        [JsonIgnore]
         public OutPoint Outpoint { get; set; }
         [JsonIgnore]
         public TxOut Output { get; set; }
         public int ConfirmationCount { get; set; }
         public bool RBF { get; set; }
+        public decimal NetworkFee { get; set; }
 
         /// <summary>
         /// This is set to true if the payment was created before CryptoPaymentData existed in BTCPayServer
@@ -53,12 +56,12 @@ namespace BTCPayServer.Payments.Bitcoin
             return Output.Value.ToDecimal(MoneyUnit.BTC);
         }
 
-        public bool PaymentCompleted(PaymentEntity entity, BTCPayNetwork network)
+        public bool PaymentCompleted(PaymentEntity entity)
         {
-            return ConfirmationCount >= network.MaxTrackedConfirmation;
+            return ConfirmationCount >= Network.MaxTrackedConfirmation;
         }
 
-        public bool PaymentConfirmed(PaymentEntity entity, SpeedPolicy speedPolicy, BTCPayNetwork network)
+        public bool PaymentConfirmed(PaymentEntity entity, SpeedPolicy speedPolicy)
         {
             if (speedPolicy == SpeedPolicy.HighSpeed)
             {
@@ -77,6 +80,16 @@ namespace BTCPayServer.Payments.Bitcoin
                 return ConfirmationCount >= 6;
             }
             return false;
+        }
+
+        public BitcoinAddress GetDestination()
+        {
+            return Output.ScriptPubKey.GetDestinationAddress(((BTCPayNetwork)Network).NBitcoinNetwork);
+        }
+
+        string CryptoPaymentData.GetDestination()
+        {
+            return GetDestination().ToString();
         }
     }
 }

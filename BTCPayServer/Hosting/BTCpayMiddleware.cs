@@ -32,15 +32,24 @@ namespace BTCPayServer.Hosting
 
         public async Task Invoke(HttpContext httpContext)
         {
-            RewriteHostIfNeeded(httpContext);
-
             try
             {
                 var bitpayAuth = GetBitpayAuth(httpContext, out bool isBitpayAuth);
                 var isBitpayAPI = IsBitpayAPI(httpContext, isBitpayAuth);
+                if (isBitpayAPI && httpContext.Request.Method == "OPTIONS")
+                {
+                    httpContext.Response.StatusCode = 200;
+                    httpContext.Response.SetHeader("Access-Control-Allow-Origin", "*");
+                    if (httpContext.Request.Headers.ContainsKey("Access-Control-Request-Headers"))
+                    {
+                        httpContext.Response.SetHeader("Access-Control-Allow-Headers", httpContext.Request.Headers["Access-Control-Request-Headers"].FirstOrDefault());
+                    }
+                    return; // We bypass MVC completely
+                }
                 httpContext.SetIsBitpayAPI(isBitpayAPI);
                 if (isBitpayAPI)
                 {
+                    httpContext.Response.SetHeader("Access-Control-Allow-Origin", "*");
                     httpContext.SetBitpayAuth(bitpayAuth);
                 }
                 await _Next(httpContext);
@@ -79,118 +88,42 @@ namespace BTCPayServer.Hosting
             if (!httpContext.Request.Path.HasValue)
                 return false;
 
+            // In case of anyone can create invoice, the storeId can be set explicitely
+            bitpayAuth |= httpContext.Request.Query.ContainsKey("storeid");
+
             var isJson = (httpContext.Request.ContentType ?? string.Empty).StartsWith("application/json", StringComparison.OrdinalIgnoreCase);
             var path = httpContext.Request.Path.Value;
+            var method = httpContext.Request.Method;
+            var isCors = method == "OPTIONS";
+
             if (
-                bitpayAuth &&
-                path == "/invoices" &&
-              httpContext.Request.Method == "POST" &&
-              isJson)
+                (isCors || bitpayAuth) &&
+                (path == "/invoices" || path == "/invoices/") &&
+              (isCors || (method == "POST" && isJson)))
                 return true;
 
             if (
-                bitpayAuth &&
-                path == "/invoices" &&
-              httpContext.Request.Method == "GET")
+                (isCors || bitpayAuth) &&
+                 (path == "/invoices" || path == "/invoices/") &&
+                 (isCors || method == "GET"))
                 return true;
 
             if (
-                path.StartsWith("/invoices/", StringComparison.OrdinalIgnoreCase) &&
-                httpContext.Request.Method == "GET" &&
-                (isJson || httpContext.Request.Query.ContainsKey("token")))
+               path.StartsWith("/invoices/", StringComparison.OrdinalIgnoreCase) &&
+               (isCors || method == "GET") &&
+               (isCors || isJson || httpContext.Request.Query.ContainsKey("token")))
                 return true;
 
             if (path.StartsWith("/rates", StringComparison.OrdinalIgnoreCase) &&
-                httpContext.Request.Method == "GET")
+                (isCors || method == "GET"))
                 return true;
 
             if (
-                path.Equals("/tokens", StringComparison.Ordinal) && 
-                ( httpContext.Request.Method == "GET" || httpContext.Request.Method == "POST"))
+                path.Equals("/tokens", StringComparison.Ordinal) &&
+                (isCors || method == "GET" || method == "POST"))
                 return true;
 
             return false;
-        }
-
-        private void RewriteHostIfNeeded(HttpContext httpContext)
-        {
-            string reverseProxyScheme = null;
-            if (httpContext.Request.Headers.TryGetValue("X-Forwarded-Proto", out StringValues proto))
-            {
-                var scheme = proto.SingleOrDefault();
-                if (scheme != null)
-                {
-                    reverseProxyScheme = scheme;
-                }
-            }
-
-            ushort? reverseProxyPort = null;
-            if (httpContext.Request.Headers.TryGetValue("X-Forwarded-Port", out StringValues port))
-            {
-                var portString = port.SingleOrDefault();
-                if (portString != null && ushort.TryParse(portString, out ushort pp))
-                {
-                    reverseProxyPort = pp;
-                }
-            }
-
-            // Make sure that code executing after this point think that the external url has been hit.
-            if (_Options.ExternalUrl != null)
-            {
-                if (reverseProxyScheme != null && _Options.ExternalUrl.Scheme != reverseProxyScheme)
-                {
-                    if (reverseProxyScheme == "http" && _Options.ExternalUrl.Scheme == "https")
-                        Logs.PayServer.LogWarning($"BTCPay ExternalUrl setting expected to use scheme '{_Options.ExternalUrl.Scheme}' externally, but the reverse proxy uses scheme '{reverseProxyScheme}'");
-                    httpContext.Request.Scheme = reverseProxyScheme;
-                }
-                else
-                {
-                    httpContext.Request.Scheme = _Options.ExternalUrl.Scheme;
-                }
-                if (_Options.ExternalUrl.IsDefaultPort)
-                    httpContext.Request.Host = new HostString(_Options.ExternalUrl.Host);
-                else
-                {
-                    if (reverseProxyPort != null && _Options.ExternalUrl.Port != reverseProxyPort.Value)
-                    {
-                        Logs.PayServer.LogWarning($"BTCPay ExternalUrl setting expected to use port '{_Options.ExternalUrl.Port}' externally, but the reverse proxy uses port '{reverseProxyPort.Value}'");
-                        httpContext.Request.Host = new HostString(_Options.ExternalUrl.Host, reverseProxyPort.Value);
-                    }
-                    else
-                    {
-                        httpContext.Request.Host = new HostString(_Options.ExternalUrl.Host, _Options.ExternalUrl.Port);
-                    }
-                }
-            }
-            // NGINX pass X-Forwarded-Proto and X-Forwarded-Port, so let's use that to have better guess of the real domain
-            else
-            {
-                ushort? p = null;
-                if (reverseProxyScheme != null)
-                {
-                    httpContext.Request.Scheme = reverseProxyScheme;
-                    if (reverseProxyScheme == "http")
-                        p = 80;
-                    if (reverseProxyScheme == "https")
-                        p = 443;
-                }
-
-
-                if (reverseProxyPort != null)
-                {
-                    p = reverseProxyPort.Value;
-                }
-
-                if (p.HasValue)
-                {
-                    bool isDefault = httpContext.Request.Scheme == "http" && p.Value == 80;
-                    isDefault |= httpContext.Request.Scheme == "https" && p.Value == 443;
-                    if (isDefault)
-                        httpContext.Request.Host = new HostString(httpContext.Request.Host.Host);
-                    else
-                        httpContext.Request.Host = new HostString(httpContext.Request.Host.Host, p.Value);
-                }
-            }
         }
 
         private static async Task HandleBitpayHttpException(HttpContext httpContext, BitpayHttpException ex)

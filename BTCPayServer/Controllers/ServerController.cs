@@ -8,7 +8,7 @@ using BTCPayServer.Services;
 using BTCPayServer.Services.Mails;
 using BTCPayServer.Services.Rates;
 using BTCPayServer.Services.Stores;
-using BTCPayServer.Validations;
+using BTCPayServer.Validation;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -17,6 +17,8 @@ using NBitcoin.DataEncoders;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -24,32 +26,61 @@ using System.Net.Mail;
 using System.Threading.Tasks;
 using Renci.SshNet;
 using BTCPayServer.Logging;
+using BTCPayServer.Lightning;
+using System.Runtime.CompilerServices;
+using BTCPayServer.Storage.Models;
+using BTCPayServer.Storage.Services;
+using BTCPayServer.Storage.Services.Providers;
+using BTCPayServer.Services.Apps;
+using Microsoft.AspNetCore.Mvc.Rendering;
+using BTCPayServer.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace BTCPayServer.Controllers
 {
     [Authorize(Policy = BTCPayServer.Security.Policies.CanModifyServerSettings.Key)]
-    public class ServerController : Controller
+    public partial class ServerController : Controller
     {
         private UserManager<ApplicationUser> _UserManager;
         SettingsRepository _SettingsRepository;
-        private BTCPayRateProviderFactory _RateProviderFactory;
+        private readonly NBXplorerDashboard _dashBoard;
+        private RateFetcher _RateProviderFactory;
         private StoreRepository _StoreRepository;
         LightningConfigurationProvider _LnConfigProvider;
+        private readonly TorServices _torServices;
         BTCPayServerOptions _Options;
+        ApplicationDbContextFactory _ContextFactory;
+        private readonly StoredFileRepository _StoredFileRepository;
+        private readonly FileService _FileService;
+        private readonly IEnumerable<IStorageProviderService> _StorageProviderServices;
 
         public ServerController(UserManager<ApplicationUser> userManager,
-            Configuration.BTCPayServerOptions options,
-            BTCPayRateProviderFactory rateProviderFactory,
+            StoredFileRepository storedFileRepository,
+            FileService fileService,
+            IEnumerable<IStorageProviderService> storageProviderServices,
+            BTCPayServerOptions options,
+            RateFetcher rateProviderFactory,
             SettingsRepository settingsRepository,
+            NBXplorerDashboard dashBoard,
+            IHttpClientFactory httpClientFactory,
             LightningConfigurationProvider lnConfigProvider,
-            Services.Stores.StoreRepository storeRepository)
+            TorServices torServices,
+            StoreRepository storeRepository,
+            ApplicationDbContextFactory contextFactory)
         {
             _Options = options;
+            _StoredFileRepository = storedFileRepository;
+            _FileService = fileService;
+            _StorageProviderServices = storageProviderServices;
             _UserManager = userManager;
             _SettingsRepository = settingsRepository;
+            _dashBoard = dashBoard;
+            HttpClientFactory = httpClientFactory;
             _RateProviderFactory = rateProviderFactory;
             _StoreRepository = storeRepository;
             _LnConfigProvider = lnConfigProvider;
+            _torServices = torServices;
+            _ContextFactory = contextFactory;
         }
 
         [Route("server/rates")]
@@ -157,16 +188,19 @@ namespace BTCPayServer.Controllers
             MaintenanceViewModel vm = new MaintenanceViewModel();
             vm.UserName = "btcpayserver";
             vm.DNSDomain = this.Request.Host.Host;
+            vm.SetConfiguredSSH(_Options.SSHSettings);
             if (IPAddress.TryParse(vm.DNSDomain, out var unused))
                 vm.DNSDomain = null;
             return View(vm);
         }
+
         [Route("server/maintenance")]
         [HttpPost]
         public async Task<IActionResult> Maintenance(MaintenanceViewModel vm, string command)
         {
             if (!ModelState.IsValid)
                 return View(vm);
+            vm.SetConfiguredSSH(_Options.SSHSettings);
             if (command == "changedomain")
             {
                 if (string.IsNullOrWhiteSpace(vm.DNSDomain))
@@ -175,6 +209,8 @@ namespace BTCPayServer.Controllers
                     return View(vm);
                 }
                 vm.DNSDomain = vm.DNSDomain.Trim().ToLowerInvariant();
+                if (vm.DNSDomain.Equals(this.Request.Host.Host, StringComparison.OrdinalIgnoreCase))
+                    return View(vm);
                 if (IPAddress.TryParse(vm.DNSDomain, out var unused))
                 {
                     ModelState.AddModelError(nameof(vm.DNSDomain), $"This should be a domain name");
@@ -195,12 +231,13 @@ namespace BTCPayServer.Controllers
                     {
                         builder.Scheme = this.Request.Scheme;
                         builder.Host = vm.DNSDomain;
-                        if (this.Request.Host.Port != null)
-                            builder.Port = this.Request.Host.Port.Value;
-                        builder.Path = "runid";
-                        builder.Query = $"expected={RunId}";
-                        var response = await client.GetAsync(builder.Uri);
-                        if (!response.IsSuccessStatusCode)
+                        var addresses1 = GetAddressAsync(this.Request.Host.Host);
+                        var addresses2 = GetAddressAsync(vm.DNSDomain);
+                        await Task.WhenAll(addresses1, addresses2);
+
+                        var addressesSet = addresses1.GetAwaiter().GetResult().Select(c => c.ToString()).ToHashSet();
+                        var hasCommonAddress = addresses2.GetAwaiter().GetResult().Select(c => c.ToString()).Any(s => addressesSet.Contains(s));
+                        if (!hasCommonAddress)
                         {
                             ModelState.AddModelError(nameof(vm.DNSDomain), $"Invalid host ({vm.DNSDomain} is not pointing to this BTCPay instance)");
                             return View(vm);
@@ -232,11 +269,25 @@ namespace BTCPayServer.Controllers
                     return error;
                 StatusMessage = $"The server might restart soon if an update is available...";
             }
+            else if (command == "clean")
+            {
+                var error = RunSSH(vm, $"btcpay-clean.sh");
+                if (error != null)
+                    return error;
+                StatusMessage = $"The old docker images will be cleaned soon...";
+            }
             else
             {
                 return NotFound();
             }
             return RedirectToAction(nameof(Maintenance));
+        }
+
+        private Task<IPAddress[]> GetAddressAsync(string domainOrIP)
+        {
+            if (IPAddress.TryParse(domainOrIP, out var ip))
+                return Task.FromResult(new[] { ip });
+            return Dns.GetHostAddressesAsync(domainOrIP);
         }
 
         public static string RunId = Encoders.Hex.EncodeData(NBitcoin.RandomUtils.GetBytes(32));
@@ -253,7 +304,31 @@ namespace BTCPayServer.Controllers
         private IActionResult RunSSH(MaintenanceViewModel vm, string ssh)
         {
             ssh = $"sudo bash -c '. /etc/profile.d/btcpay-env.sh && nohup {ssh} > /dev/null 2>&1 & disown'";
-            var sshClient = vm.CreateSSHClient(this.Request.Host.Host);
+            var sshClient = _Options.SSHSettings == null ? vm.CreateSSHClient(this.Request.Host.Host)
+                                                         : new SshClient(_Options.SSHSettings.CreateConnectionInfo());
+
+            if (_Options.TrustedFingerprints.Count != 0)
+            {
+                sshClient.HostKeyReceived += (object sender, Renci.SshNet.Common.HostKeyEventArgs e) =>
+                {
+                    if (_Options.TrustedFingerprints.Count == 0)
+                    {
+                        Logs.Configuration.LogWarning($"SSH host fingerprint for {e.HostKeyName} is untrusted, start BTCPay with -sshtrustedfingerprints \"{Encoders.Hex.EncodeData(e.FingerPrint)}\"");
+                        e.CanTrust = true; // Not a typo, we want the connection to succeed with a warning
+                    }
+                    else
+                    {
+                        e.CanTrust = _Options.IsTrustedFingerprint(e.FingerPrint, e.HostKey);
+                        if (!e.CanTrust)
+                            Logs.Configuration.LogError($"SSH host fingerprint for {e.HostKeyName} is untrusted, start BTCPay with -sshtrustedfingerprints \"{Encoders.Hex.EncodeData(e.FingerPrint)}\"");
+                    }
+                };
+            }
+            else
+            {
+
+            }
+
             try
             {
                 sshClient.Connect();
@@ -307,22 +382,27 @@ namespace BTCPayServer.Controllers
             var user = await _UserManager.FindByIdAsync(userId);
             if (user == null)
                 return NotFound();
-            var roles = await _UserManager.GetRolesAsync(user);
-            var isAdmin = IsAdmin(roles);
-            bool updated = false;
 
-            if (isAdmin != viewModel.IsAdmin)
+            viewModel.StatusMessage = "";
+
+            var admins = await _UserManager.GetUsersInRoleAsync(Roles.ServerAdmin);
+            if (!viewModel.IsAdmin && admins.Count == 1)
+            {
+                viewModel.StatusMessage = "This is the only Admin, so their role can't be removed until another Admin is added.";
+                return View(viewModel); // return
+            }
+
+            var roles = await _UserManager.GetRolesAsync(user);
+            if (viewModel.IsAdmin != IsAdmin(roles))
             {
                 if (viewModel.IsAdmin)
                     await _UserManager.AddToRoleAsync(user, Roles.ServerAdmin);
                 else
                     await _UserManager.RemoveFromRoleAsync(user, Roles.ServerAdmin);
-                updated = true;
-            }
-            if (updated)
-            {
+
                 viewModel.StatusMessage = "User successfully updated";
             }
+
             return View(viewModel);
         }
 
@@ -333,12 +413,28 @@ namespace BTCPayServer.Controllers
             var user = userId == null ? null : await _UserManager.FindByIdAsync(userId);
             if (user == null)
                 return NotFound();
-            return View("Confirm", new ConfirmModel()
+
+            var roles = await _UserManager.GetRolesAsync(user);
+            if (IsAdmin(roles))
             {
-                Title = "Delete user " + user.Email,
-                Description = "This user will be permanently deleted",
-                Action = "Delete"
-            });
+                var admins = await _UserManager.GetUsersInRoleAsync(Roles.ServerAdmin);
+                if (admins.Count == 1)
+                {
+                    // return
+                    return View("Confirm", new ConfirmModel("Unable to Delete Last Admin",
+                        "This is the last Admin, so it can't be removed"));
+                }
+
+                return View("Confirm", new ConfirmModel("Delete Admin " + user.Email,
+                    "Are you sure you want to delete this Admin and delete all accounts, users and data associated with the server account?",
+                    "Delete"));
+            }
+            else
+            {
+                return View("Confirm", new ConfirmModel("Delete user " + user.Email,
+                                    "This user will be permanently deleted",
+                                    "Delete"));
+            }
         }
 
         [Route("server/users/{userId}/delete")]
@@ -359,87 +455,279 @@ namespace BTCPayServer.Controllers
         {
             get; set;
         }
-
-        [Route("server/emails")]
-        public async Task<IActionResult> Emails()
-        {
-            var data = (await _SettingsRepository.GetSettingAsync<EmailSettings>()) ?? new EmailSettings();
-            return View(new EmailsViewModel() { Settings = data });
-        }
+        public IHttpClientFactory HttpClientFactory { get; }
 
         [Route("server/policies")]
         public async Task<IActionResult> Policies()
         {
             var data = (await _SettingsRepository.GetSettingAsync<PoliciesSettings>()) ?? new PoliciesSettings();
+            ViewBag.AppsList = await GetAppSelectList();
             return View(data);
         }
+
         [Route("server/policies")]
         [HttpPost]
-        public async Task<IActionResult> Policies(PoliciesSettings settings)
+        public async Task<IActionResult> Policies(PoliciesSettings settings, string command = "")
         {
-            await _SettingsRepository.UpdateSetting(settings);
-            TempData["StatusMessage"] = "Policies updated successfully";
-            return View(settings);
-        }
-
-        [Route("server/services")]
-        public IActionResult Services()
-        {
-            var result = new ServicesViewModel();
-            foreach (var cryptoCode in _Options.ExternalServicesByCryptoCode.Keys)
+            ViewBag.AppsList = await GetAppSelectList();
+            if (command == "add-domain")
             {
+                ModelState.Clear();
+                settings.DomainToAppMapping.Add(new PoliciesSettings.DomainToAppMappingItem());
+                return View(settings);
+            }
+            if (command.StartsWith("remove-domain", StringComparison.InvariantCultureIgnoreCase))
+            {
+                ModelState.Clear();
+                var index = int.Parse(command.Substring(command.IndexOf(":",StringComparison.InvariantCultureIgnoreCase) + 1),  CultureInfo.InvariantCulture);
+                settings.DomainToAppMapping.RemoveAt(index);
+                return View(settings);
+            }
+
+            if (!ModelState.IsValid)
+            {
+                return View(settings);
+            }
+            var appIdsToFetch = settings.DomainToAppMapping.Select(item => item.AppId).ToList();
+            if (!string.IsNullOrEmpty(settings.RootAppId))
+            {
+                appIdsToFetch.Add(settings.RootAppId);
+            }
+            else
+            {
+                settings.RootAppType = null;
+            }
+
+            if (appIdsToFetch.Any())
+            {
+                using (var ctx = _ContextFactory.CreateContext())
                 {
-                    int i = 0;
-                    foreach (var grpcService in _Options.ExternalServicesByCryptoCode.GetServices<ExternalLNDGRPC>(cryptoCode))
+                    var apps = await ctx.Apps.Where(data => appIdsToFetch.Contains(data.Id))
+                        .ToDictionaryAsync(data => data.Id, data => Enum.Parse<AppType>(data.AppType));
+                    if (!string.IsNullOrEmpty(settings.RootAppId))
                     {
-                        result.LNDServices.Add(new ServicesViewModel.LNDServiceViewModel()
-                        {
-                            Crypto = cryptoCode,
-                            Type = "gRPC",
-                            Index = i++,
-                        });
+                        settings.RootAppType = apps[settings.RootAppId];
+                    }
+
+                    foreach (var domainToAppMappingItem in settings.DomainToAppMapping)
+                    {
+                        domainToAppMappingItem.AppType = apps[domainToAppMappingItem.AppId];
                     }
                 }
             }
+
+            await _SettingsRepository.UpdateSetting(settings);
+            TempData["StatusMessage"] = "Policies updated successfully";
+            return RedirectToAction(nameof(Policies));
+        }
+
+        [Route("server/services")]
+        public async Task<IActionResult> Services()
+        {
+            var result = new ServicesViewModel();
+            result.ExternalServices = _Options.ExternalServices.ToList();
+            foreach (var externalService in _Options.OtherExternalServices)
+            {
+                result.OtherExternalServices.Add(new ServicesViewModel.OtherExternalService()
+                {
+                    Name = externalService.Key,
+                    Link = this.Request.GetAbsoluteUriNoPathBase(externalService.Value).AbsoluteUri
+                });
+            }
+            if (_Options.SSHSettings != null)
+            {
+                result.OtherExternalServices.Add(new ServicesViewModel.OtherExternalService()
+                {
+                    Name = "SSH",
+                    Link = this.Url.Action(nameof(SSHService))
+                });
+            }
+            foreach (var torService in _torServices.Services)
+            {
+                if (torService.VirtualPort == 80)
+                {
+                    result.TorHttpServices.Add(new ServicesViewModel.OtherExternalService()
+                    {
+                        Name = torService.Name,
+                        Link = $"http://{torService.OnionHost}"
+                    });
+                }
+                else if (TryParseAsExternalService(torService, out var externalService))
+                {
+                    result.ExternalServices.Add(externalService);
+                }
+                else
+                {
+                    result.TorOtherServices.Add(new ServicesViewModel.OtherExternalService()
+                    {
+                        Name = torService.Name,
+                        Link = $"{torService.OnionHost}:{torService.VirtualPort}"
+                    });
+                }
+            }
+
+            var storageSettings = await _SettingsRepository.GetSettingAsync<StorageSettings>();
+            result.ExternalStorageServices.Add(new ServicesViewModel.OtherExternalService()
+            {
+                Name = storageSettings == null? "Not set": storageSettings.Provider.ToString(),
+                Link = Url.Action("Storage")
+            });
             return View(result);
         }
 
-        [Route("server/services/lnd-grpc/{cryptoCode}/{index}")]
-        public IActionResult LNDGRPCServices(string cryptoCode, int index, uint? nonce)
+        private async Task<List<SelectListItem>> GetAppSelectList()
         {
-            var external = GetExternalLNDConnectionString(cryptoCode, index);
-            if (external == null)
-                return NotFound();
-            var model = new LNDGRPCServicesViewModel();
+// load display app dropdown
+            using (var ctx = _ContextFactory.CreateContext())
+            {
+                var userId = _UserManager.GetUserId(base.User);
+                var selectList = await ctx.Users.Where(user => user.Id == userId)
+                    .SelectMany(s => s.UserStores)
+                    .Select(s => s.StoreData)
+                    .SelectMany(s => s.Apps)
+                    .Select(a => new SelectListItem($"{a.AppType} - {a.Name}", a.Id)).ToListAsync();
+                selectList.Insert(0, new SelectListItem("(None)", null));
+                return selectList;
+            }
+        }
 
-            model.Host = $"{external.BaseUri.DnsSafeHost}:{external.BaseUri.Port}";
-            model.SSL = external.BaseUri.Scheme == "https";
-            if (external.CertificateThumbprint != null)
+        private static bool TryParseAsExternalService(TorService torService, out ExternalService externalService)
+        {
+            externalService = null;
+            if (torService.ServiceType == TorServiceType.P2P)
             {
-                model.CertificateThumbprint = Encoders.Hex.EncodeData(external.CertificateThumbprint);
+                externalService = new ExternalService()
+                {
+                    CryptoCode = torService.Network.CryptoCode,
+                    DisplayName = "Full node P2P",
+                    Type = ExternalServiceTypes.P2P,
+                    ConnectionString = new ExternalConnectionString(new Uri($"bitcoin-p2p://{torService.OnionHost}:{torService.VirtualPort}", UriKind.Absolute)),
+                    ServiceName = torService.Name,
+                };
             }
-            if (external.Macaroon != null)
+            return externalService != null;
+        }
+
+        private ExternalService GetService(string serviceName, string cryptoCode)
+        {
+            var result = _Options.ExternalServices.GetService(serviceName, cryptoCode);
+            if (result != null)
+                return result;
+            _torServices.Services.FirstOrDefault(s => TryParseAsExternalService(s, out result));
+            return result;
+        }
+
+        [Route("server/services/{serviceName}/{cryptoCode}")]
+        public async Task<IActionResult> Service(string serviceName, string cryptoCode, bool showQR = false, uint? nonce = null)
+        {
+            if (!_dashBoard.IsFullySynched(cryptoCode, out var unusud))
             {
-                model.Macaroon = Encoders.Hex.EncodeData(external.Macaroon);
+                StatusMessage = $"Error: {cryptoCode} is not fully synched";
+                return RedirectToAction(nameof(Services));
             }
+            var service = GetService(serviceName, cryptoCode);
+            if (service == null)
+                return NotFound();
+
+            try
+            {
+                if (service.Type == ExternalServiceTypes.P2P)
+                {
+                    return View("P2PService", new LightningWalletServices()
+                    {
+                        ShowQR = showQR,
+                        WalletName = service.ServiceName,
+                        ServiceLink = service.ConnectionString.Server.AbsoluteUri.WithoutEndingSlash()
+                    });
+                }
+                var connectionString = await service.ConnectionString.Expand(this.Request.GetAbsoluteUriNoPathBase(), service.Type, _Options.NetworkType);
+                switch (service.Type)
+                {
+                    case ExternalServiceTypes.Charge:
+                        return LightningChargeServices(service, connectionString, showQR);
+                    case ExternalServiceTypes.RTL:
+                    case ExternalServiceTypes.Spark:
+                        if (connectionString.AccessKey == null)
+                        {
+                            StatusMessage = $"Error: The access key of the service is not set";
+                            return RedirectToAction(nameof(Services));
+                        }
+                        LightningWalletServices vm = new LightningWalletServices();
+                        vm.ShowQR = showQR;
+                        vm.WalletName = service.DisplayName;
+                        vm.ServiceLink = $"{connectionString.Server}?access-key={connectionString.AccessKey}";
+                        return View("LightningWalletServices", vm);
+                    case ExternalServiceTypes.LNDGRPC:
+                    case ExternalServiceTypes.LNDRest:
+                        return LndServices(service, connectionString, nonce);
+                    default:
+                        throw new NotSupportedException(service.Type.ToString());
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Error: {ex.Message}";
+                return RedirectToAction(nameof(Services));
+            }
+        }
+
+        private IActionResult LightningChargeServices(ExternalService service, ExternalConnectionString connectionString, bool showQR = false)
+        {
+            ChargeServiceViewModel vm = new ChargeServiceViewModel();
+            vm.Uri = connectionString.Server.AbsoluteUri;
+            vm.APIToken = connectionString.APIToken;
+            var builder = new UriBuilder(connectionString.Server);
+            builder.UserName = "api-token";
+            builder.Password = vm.APIToken;
+            vm.AuthenticatedUri = builder.ToString();
+            return View(nameof(LightningChargeServices), vm);
+        }
+
+        private IActionResult LndServices(ExternalService service, ExternalConnectionString connectionString, uint? nonce)
+        {
+            var model = new LndGrpcServicesViewModel();
+            if (service.Type == ExternalServiceTypes.LNDGRPC)
+            {
+                model.Host = $"{connectionString.Server.DnsSafeHost}:{connectionString.Server.Port}";
+                model.SSL = connectionString.Server.Scheme == "https";
+                model.ConnectionType = "GRPC";
+                model.GRPCSSLCipherSuites = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-SHA256";
+            }
+            else if (service.Type == ExternalServiceTypes.LNDRest)
+            {
+                model.Uri = connectionString.Server.AbsoluteUri;
+                model.ConnectionType = "REST";
+            }
+
+            if (connectionString.CertificateThumbprint != null)
+            {
+                model.CertificateThumbprint = connectionString.CertificateThumbprint;
+            }
+            if (connectionString.Macaroon != null)
+            {
+                model.Macaroon = Encoders.Hex.EncodeData(connectionString.Macaroon);
+            }
+            model.AdminMacaroon = connectionString.Macaroons?.AdminMacaroon?.Hex;
+            model.InvoiceMacaroon = connectionString.Macaroons?.InvoiceMacaroon?.Hex;
+            model.ReadonlyMacaroon = connectionString.Macaroons?.ReadonlyMacaroon?.Hex;
 
             if (nonce != null)
             {
-                var configKey = GetConfigKey("lnd-grpc", cryptoCode, index, nonce.Value);
+                var configKey = GetConfigKey("lnd", service.ServiceName, service.CryptoCode, nonce.Value);
                 var lnConfig = _LnConfigProvider.GetConfig(configKey);
                 if (lnConfig != null)
                 {
-                    model.QRCodeLink = $"{this.Request.GetAbsoluteRoot().WithTrailingSlash()}lnd-config/{configKey}/lnd.config";
+                    model.QRCodeLink = Request.GetAbsoluteUri(Url.Action(nameof(GetLNDConfig), new { configKey = configKey }));
                     model.QRCode = $"config={model.QRCodeLink}";
                 }
             }
 
-            return View(model);
+            return View(nameof(LndServices), model);
         }
 
-        private static uint GetConfigKey(string type, string cryptoCode, int index, uint nonce)
+        private static uint GetConfigKey(string type, string serviceName, string cryptoCode, uint nonce)
         {
-            return (uint)HashCode.Combine(type, cryptoCode, index, nonce);
+            return (uint)HashCode.Combine(type, serviceName, cryptoCode, nonce);
         }
 
         [Route("lnd-config/{configKey}/lnd.config")]
@@ -452,50 +740,85 @@ namespace BTCPayServer.Controllers
             return Json(conf);
         }
 
-        [Route("server/services/lnd-grpc/{cryptoCode}/{index}")]
+        [Route("server/services/{serviceName}/{cryptoCode}")]
         [HttpPost]
-        public IActionResult LNDGRPCServicesPOST(string cryptoCode, int index)
+        public async Task<IActionResult> ServicePost(string serviceName, string cryptoCode)
         {
-            var external = GetExternalLNDConnectionString(cryptoCode, index);
-            if (external == null)
+            if (!_dashBoard.IsFullySynched(cryptoCode, out var unusud))
+            {
+                StatusMessage = $"Error: {cryptoCode} is not fully synched";
+                return RedirectToAction(nameof(Services));
+            }
+            var service = GetService(serviceName, cryptoCode);
+            if (service == null)
                 return NotFound();
+
+            ExternalConnectionString connectionString = null;
+            try
+            {
+                connectionString = await service.ConnectionString.Expand(this.Request.GetAbsoluteUriNoPathBase(), service.Type, _Options.NetworkType);
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Error: {ex.Message}";
+                return RedirectToAction(nameof(Services));
+            }
+
             LightningConfigurations confs = new LightningConfigurations();
-            LightningConfiguration conf = new LightningConfiguration();
-            conf.Type = "grpc";
-            conf.CryptoCode = cryptoCode;
-            conf.Host = external.BaseUri.DnsSafeHost;
-            conf.Port = external.BaseUri.Port;
-            conf.SSL = external.BaseUri.Scheme == "https";
-            conf.Macaroon = external.Macaroon == null ? null : Encoders.Hex.EncodeData(external.Macaroon);
-            conf.CertificateThumbprint = external.CertificateThumbprint == null ? null : Encoders.Hex.EncodeData(external.CertificateThumbprint);
-            confs.Configurations.Add(conf);
+            if (service.Type == ExternalServiceTypes.LNDGRPC)
+            {
+                LightningConfiguration grpcConf = new LightningConfiguration();
+                grpcConf.Type = "grpc";
+                grpcConf.Host = connectionString.Server.DnsSafeHost;
+                grpcConf.Port = connectionString.Server.Port;
+                grpcConf.SSL = connectionString.Server.Scheme == "https";
+                confs.Configurations.Add(grpcConf);
+            }
+            else if (service.Type == ExternalServiceTypes.LNDRest)
+            {
+                var restconf = new LNDRestConfiguration();
+                restconf.Type = "lnd-rest";
+                restconf.Uri = connectionString.Server.AbsoluteUri;
+                confs.Configurations.Add(restconf);
+            }
+            else
+                throw new NotSupportedException(service.Type.ToString());
+            var commonConf = (LNDConfiguration)confs.Configurations[confs.Configurations.Count - 1];
+            commonConf.ChainType = _Options.NetworkType.ToString();
+            commonConf.CryptoCode = cryptoCode;
+            commonConf.Macaroon = connectionString.Macaroon == null ? null : Encoders.Hex.EncodeData(connectionString.Macaroon);
+            commonConf.CertificateThumbprint = connectionString.CertificateThumbprint == null ? null : connectionString.CertificateThumbprint;
+            commonConf.AdminMacaroon = connectionString.Macaroons?.AdminMacaroon?.Hex;
+            commonConf.ReadonlyMacaroon = connectionString.Macaroons?.ReadonlyMacaroon?.Hex;
+            commonConf.InvoiceMacaroon = connectionString.Macaroons?.InvoiceMacaroon?.Hex;
 
             var nonce = RandomUtils.GetUInt32();
-            var configKey = GetConfigKey("lnd-grpc", cryptoCode, index, nonce);
+            var configKey = GetConfigKey("lnd", serviceName, cryptoCode, nonce);
             _LnConfigProvider.KeepConfig(configKey, confs);
-            return RedirectToAction(nameof(LNDGRPCServices), new { cryptoCode = cryptoCode, nonce = nonce });
+            return RedirectToAction(nameof(Service), new { cryptoCode = cryptoCode, serviceName = serviceName, nonce = nonce });
         }
 
-        private LightningConnectionString GetExternalLNDConnectionString(string cryptoCode, int index)
+        [Route("server/services/ssh")]
+        public IActionResult SSHService(bool downloadKeyFile = false)
         {
-            var connectionString = _Options.ExternalServicesByCryptoCode.GetServices<ExternalLNDGRPC>(cryptoCode).Skip(index).Select(c => c.ConnectionString).FirstOrDefault();
-            if (connectionString == null)
-                return null;
-            connectionString = connectionString.Clone();
-            if (connectionString.MacaroonFilePath != null)
+            var settings = _Options.SSHSettings;
+            if (settings == null)
+                return NotFound();
+            if (downloadKeyFile)
             {
-                try
-                {
-                    connectionString.Macaroon = System.IO.File.ReadAllBytes(connectionString.MacaroonFilePath);
-                    connectionString.MacaroonFilePath = null;
-                }
-                catch
-                {
-                    Logging.Logs.Configuration.LogWarning($"{cryptoCode}: The macaroon file path of the external LND grpc config was not found ({connectionString.MacaroonFilePath})");
-                    return null;
-                }
+                if (!System.IO.File.Exists(settings.KeyFile))
+                    return NotFound();
+                return File(System.IO.File.ReadAllBytes(settings.KeyFile), "application/octet-stream", "id_rsa");
             }
-            return connectionString;
+
+            var server = Extensions.IsLocalNetwork(settings.Server) ? this.Request.Host.Host : settings.Server;
+            SSHServiceViewModel vm = new SSHServiceViewModel();
+            string port = settings.Port == 22 ? "" : $" -p {settings.Port}";
+            vm.CommandLine = $"ssh {settings.Username}@{server}{port}";
+            vm.Password = settings.Password;
+            vm.KeyFilePassword = settings.KeyFilePassword;
+            vm.HasKeyFile = !string.IsNullOrEmpty(settings.KeyFile);
+            return View(vm);
         }
 
         [Route("server/theme")]
@@ -513,19 +836,28 @@ namespace BTCPayServer.Controllers
             return View(settings);
         }
 
+
+        [Route("server/emails")]
+        public async Task<IActionResult> Emails()
+        {
+            var data = (await _SettingsRepository.GetSettingAsync<EmailSettings>()) ?? new EmailSettings();
+            return View(new EmailsViewModel() { Settings = data });
+        }
+
         [Route("server/emails")]
         [HttpPost]
         public async Task<IActionResult> Emails(EmailsViewModel model, string command)
         {
+            if (!model.Settings.IsComplete())
+            {
+                model.StatusMessage = "Error: Required fields missing";
+                return View(model);
+            }
+
             if (command == "Test")
             {
                 try
                 {
-                    if (!model.Settings.IsComplete())
-                    {
-                        model.StatusMessage = "Error: Required fields missing";
-                        return View(model);
-                    }
                     var client = model.Settings.CreateSmtpClient();
                     await client.SendMailAsync(model.Settings.From, model.TestEmail, "BTCPay test", "BTCPay test");
                     model.StatusMessage = "Email sent to " + model.TestEmail + ", please, verify you received it";
@@ -542,6 +874,70 @@ namespace BTCPayServer.Controllers
                 model.StatusMessage = "Email settings saved";
                 return View(model);
             }
+        }
+
+        [Route("server/logs/{file?}")]
+        public async Task<IActionResult> LogsView(string file = null, int offset = 0)
+        {
+            if (offset < 0)
+            {
+                offset = 0;
+            }
+
+            var vm = new LogsViewModel();
+
+            if (string.IsNullOrEmpty(_Options.LogFile))
+            {
+                vm.StatusMessage = "Error: File Logging Option not specified. " +
+                                   "You need to set debuglog and optionally " +
+                                   "debugloglevel in the configuration or through runtime arguments";
+            }
+            else
+            {
+                var di = Directory.GetParent(_Options.LogFile);
+                if (di == null)
+                {
+                    vm.StatusMessage = "Error: Could not load log files";
+                }
+
+                var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(_Options.LogFile);
+                var fileExtension = Path.GetExtension(_Options.LogFile) ?? string.Empty;
+                var logFiles = di.GetFiles($"{fileNameWithoutExtension}*{fileExtension}");
+                vm.LogFileCount = logFiles.Length;
+                vm.LogFiles = logFiles
+                    .OrderBy(info => info.LastWriteTime)
+                    .Skip(offset)
+                    .Take(5)
+                    .ToList();
+                vm.LogFileOffset = offset;
+
+                if (string.IsNullOrEmpty(file) || !file.EndsWith(fileExtension, StringComparison.Ordinal))
+                    return View("Logs", vm);
+                vm.Log = "";
+                var fi = vm.LogFiles.FirstOrDefault(o => o.Name == file);
+                if (fi == null)
+                    return NotFound();
+                try
+                {
+                    using (var fileStream = new FileStream(
+                        fi.FullName,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite))
+                    {
+                        using (var reader = new StreamReader(fileStream))
+                        {
+                            vm.Log = await reader.ReadToEndAsync();
+                        }
+                    }
+                }
+                catch
+                {
+                    return NotFound();
+                }
+            }
+
+            return View("Logs", vm);
         }
     }
 }

@@ -53,6 +53,12 @@ namespace BTCPayServer.Models.InvoicingModels
             get; set;
         }
 
+        [EmailAddress]
+        public string NotificationEmail
+        {
+            get; set;
+        }
+
         [Uri]
         public string NotificationUrl
         {
@@ -60,6 +66,17 @@ namespace BTCPayServer.Models.InvoicingModels
         }
 
         public SelectList Stores
+        {
+            get;
+            set;
+        }
+        
+        public List<string> SupportedTransactionCurrencies
+        {
+            get;
+            set;
+        }
+        public SelectList AvailablePaymentMethods
         {
             get;
             set;

@@ -1,12 +1,13 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+﻿using System.Linq;
+using BTCPayServer.Authentication.OpenId.Models;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using BTCPayServer.Models;
-using Microsoft.EntityFrameworkCore.Infrastructure.Internal;
+using BTCPayServer.Services.PaymentRequests;
+using BTCPayServer.Services.U2F.Models;
+using BTCPayServer.Storage.Models;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using OpenIddict.EntityFrameworkCore.Models;
 
 namespace BTCPayServer.Data
 {
@@ -54,6 +55,11 @@ namespace BTCPayServer.Data
         {
             get; set;
         }
+        
+        public DbSet<PaymentRequestData> PaymentRequests
+        {
+            get; set;
+        }
 
         public DbSet<StoreData> Stores
         {
@@ -89,8 +95,16 @@ namespace BTCPayServer.Data
         public DbSet<APIKeyData> ApiKeys
         {
             get; set;
+        } 
+        
+        public DbSet<StoredFile> Files
+        {
+            get; set;
         }
+       
 
+        public DbSet<U2FDevice> U2FDevices { get; set; }   
+        
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
             var isConfigured = optionsBuilder.Options.Extensions.OfType<RelationalOptionsExtension>().Any();
@@ -204,6 +218,22 @@ namespace BTCPayServer.Data
                     o.UniqueId
 #pragma warning restore CS0618
                 });
+            
+            
+            builder.Entity<PaymentRequestData>()
+                .HasOne(o => o.StoreData)
+                .WithMany(i => i.PaymentRequests)
+                .OnDelete(DeleteBehavior.Cascade);
+            builder.Entity<PaymentRequestData>()
+                .Property(e => e.Created)
+                .HasDefaultValue(NBitcoin.Utils.UnixTimeToDateTime(0));
+
+            builder.Entity<PaymentRequestData>()
+                .HasIndex(o => o.Status);
+
+            builder.UseOpenIddict<BTCPayOpenIdClient, BTCPayOpenIdAuthorization, OpenIddictScope<string>, BTCPayOpenIdToken, string>();
+
         }
     }
+
 }

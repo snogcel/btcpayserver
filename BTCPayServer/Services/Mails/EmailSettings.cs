@@ -20,12 +20,12 @@ namespace BTCPayServer.Services.Mails
             get; set;
         }
 
-        public String Login
+        public string Login
         {
             get; set;
         }
-
-        public String Password
+        [DataType(DataType.Password)]
+        public string Password
         {
             get; set;
         }
@@ -35,6 +35,7 @@ namespace BTCPayServer.Services.Mails
             get; set;
         }
 
+        [Display(Name = "Enable SSL")]
         public bool EnableSSL
         {
             get; set;

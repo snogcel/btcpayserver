@@ -1,11 +1,22 @@
 ﻿@model StoreViewModel
 @{
     Layout = "../Shared/_NavLayout.cshtml";
-    ViewData["Title"] = "Profile";
-    ViewData.AddActivePage(BTCPayServer.Views.Stores.StoreNavPages.Index);
+    ViewData.SetActivePageAndTitle(StoreNavPages.Index, "Profile");
 }
 
-<h4>@ViewData["Title"]</h4>
+<style type="text/css">
+    .smMaxWidth {
+        max-width: 150px;
+    }
+
+    @@media (min-width: 768px) {
+        .smMaxWidth {
+            max-width: 300px;
+        }
+    }
+</style>
+
+
 <partial name="_StatusMessage" for="@TempData["TempDataProperty-StatusMessage"]" />
 
 <div class="row">
@@ -31,26 +42,40 @@
                 <span asp-validation-for="StoreWebsite" class="text-danger"></span>
             </div>
             <div class="form-group">
-                <label asp-for="NetworkFee"></label>
-                <input asp-for="NetworkFee" type="checkbox" class="form-check" />
+                <label asp-for="NetworkFeeMode"></label>
+                <a href="https://docs.btcpayserver.org/faq-and-common-issues/faq-stores#add-network-fee-to-invoice-vary-with-mining-fees" target="_blank"><span class="fa fa-question-circle-o" title="More information..."></span></a>
+                <select asp-for="NetworkFeeMode" class="form-control">
+                    <option value="MultiplePaymentsOnly">... only if the customer makes more than one payment for the invoice</option>
+                    <option value="Always">... on every payment</option>
+                    <option value="Never">Never add network fee</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label asp-for="AnyoneCanCreateInvoice"></label>
+                <a href="https://docs.btcpayserver.org/faq-and-common-issues/faq-stores#allow-anyone-to-create-invoice" target="_blank"><span class="fa fa-question-circle-o" title="More information..."></span></a>
+                <input asp-for="AnyoneCanCreateInvoice" type="checkbox" class="form-check" />
             </div>
             <div class="form-group">
                 <label asp-for="InvoiceExpiration"></label>
+                <a href="https://docs.btcpayserver.org/faq-and-common-issues/faq-stores#invoice-expires-if-the-full-amount-has-not-been-paid-after-minutes" target="_blank"><span class="fa fa-question-circle-o" title="More information..."></span></a>
                 <input asp-for="InvoiceExpiration" class="form-control" />
                 <span asp-validation-for="InvoiceExpiration" class="text-danger"></span>
             </div>
             <div class="form-group">
                 <label asp-for="MonitoringExpiration"></label>
+                <a href="https://docs.btcpayserver.org/faq-and-common-issues/faq-stores#payment-invalid-if-transactions-fails-to-confirm-minutes-after-invoice-expiration" target="_blank"><span class="fa fa-question-circle-o" title="More information..."></span></a>
                 <input asp-for="MonitoringExpiration" class="form-control" />
                 <span asp-validation-for="MonitoringExpiration" class="text-danger"></span>
             </div>
             <div class="form-group">
                 <label asp-for="PaymentTolerance"></label>
+                <a href="https://docs.btcpayserver.org/faq-and-common-issues/faq-stores#consider-the-invoice-paid-even-if-the-paid-amount-is-less-than-expected" target="_blank"><span class="fa fa-question-circle-o" title="More information..."></span></a>
                 <input asp-for="PaymentTolerance" class="form-control" />
                 <span asp-validation-for="PaymentTolerance" class="text-danger"></span>
             </div>
             <div class="form-group">
                 <label asp-for="SpeedPolicy"></label>
+                <a href="https://docs.btcpayserver.org/faq-and-common-issues/faq-stores#consider-the-invoice-confirmed-when-the-payment-transaction" target="_blank"><span class="fa fa-question-circle-o" title="More information..."></span></a>
                 <select asp-for="SpeedPolicy" class="form-control">
                     <option value="0">Is unconfirmed</option>
                     <option value="1">Has at least 1 confirmation</option>
@@ -70,7 +95,8 @@
                         <tr>
                             <th>Crypto</th>
                             <th>Derivation Scheme</th>
-                            <th style="text-align:right">Actions</th>
+                            <th style="text-align:center;">Enabled</th>
+                            <th style="text-align:right;">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -78,13 +104,23 @@
                         {
                             <tr>
                                 <td>@scheme.Crypto</td>
-                                <td style="max-width:300px;overflow:hidden;">@scheme.Value</td>
+                                <td class="smMaxWidth text-truncate">@scheme.Value</td>
+                                <td style="text-align:center;">
+                                    @if(scheme.Enabled)
+                                    {
+                                        <span class="fa fa-check"></span>
+                                    }
+                                    else
+                                    {
+                                        <span class="fa fa-times"></span>
+                                    }
+                                </td>
                                 <td style="text-align:right">
                                     @if(!string.IsNullOrWhiteSpace(scheme.Value))
                                     {
                                         <a asp-action="WalletTransactions" asp-controller="Wallets" asp-route-walletId="@scheme.WalletId">Wallet</a><span> - </span>
                                     }
-                                    <a asp-action="AddDerivationScheme" asp-route-cryptoCode="@scheme.Crypto">Modify</a>
+                                    <a asp-action="AddDerivationScheme" asp-route-cryptoCode="@scheme.Crypto" id="ModifyBTC">Modify</a>
                                 </td>
                             </tr>
                         }
@@ -106,6 +142,7 @@
                             <tr>
                                 <th>Crypto</th>
                                 <th>Address</th>
+                                <th style="text-align:center;">Enabled</th>
                                 <th style="text-align:right">Actions</th>
                             </tr>
                         </thead>
@@ -114,7 +151,17 @@
                             {
                                 <tr>
                                     <td>@scheme.CryptoCode</td>
-                                    <td>@scheme.Address</td>
+                                    <td class="smMaxWidth text-truncate">@scheme.Address</td>
+                                    <td style="text-align:center;">
+                                        @if(scheme.Enabled)
+                                        {
+                                            <span class="fa fa-check"></span>
+                                        }
+                                        else
+                                        {
+                                            <span class="fa fa-times"></span>
+                                        }
+                                    </td>
                                     <td style="text-align:right"><a asp-action="AddLightningNode" asp-route-cryptoCode="@scheme.CryptoCode">Modify</a></td>
                                 </tr>
                             }
@@ -130,6 +177,65 @@
                     Available placeholders are: {StoreName}, {ItemDescription} and {OrderId}
                 </p>
             </div>
+            
+             <div class="form-group">
+                <div class="form-group">
+                    <h5>Third party Payment methods</h5>
+                </div>
+                <div class="form-group">
+                    <table class="table table-sm table-responsive-md">
+                        <thead>
+                            <tr>
+                                <th>Provider</th>
+                                <th style="text-align:center;">Enabled</th>
+                                <th style="text-align:right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        @foreach(var scheme in Model.ThirdPartyPaymentMethods)
+                        {
+                            <tr>
+                                <td>@scheme.Provider</td>
+                                <td style="text-align:center;">
+                                    @if(scheme.Enabled)
+                                    {
+                                        <span class="fa fa-check"></span>
+                                    }
+                                    else
+                                    {
+                                        <span class="fa fa-times"></span>
+                                    }
+                                </td>
+                                <td style="text-align:right"><a asp-action="@scheme.Action" >Modify</a></td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        <div class="form-group">
+            <div class="form-group">
+                <h5>Services</h5>
+            </div>
+            <div class="form-group">
+                <table class="table table-sm table-responsive-md">
+                    <thead>
+                    <tr>
+                        <th>Service</th>
+                        <th style="text-align:right">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr>
+                        <td>
+                            Email
+                        </td>
+                        <td style="text-align:right"><a asp-action="Emails" >Modify</a></td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
             @if(Model.CanDelete)
             {
                 <div class="form-group">
@@ -140,7 +246,7 @@
                     </div>
                 </div>
             }
-            <button name="command" type="submit" class="btn btn-primary" value="Save">Save</button>
+            <button name="command" type="submit" class="btn btn-primary" value="Save" id="Save">Save</button>
         </form>
     </div>
 </div>

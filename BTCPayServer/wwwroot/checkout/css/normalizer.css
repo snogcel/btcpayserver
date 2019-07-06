@@ -6,10 +6,6 @@ html {
     -webkit-text-size-adjust: 100%;
 }
 
-body {
-    margin: 0;
-}
-
 article,
 aside,
 details,
@@ -333,8 +329,9 @@ body {
     font-family: "Roboto", "Helvetica", sans-serif;
     font-size: 1rem;
     line-height: 1.5;
-    color: #373a3c;
     background-color: #fff;
+    margin: 0;
+    background: #E4E4E4;
 }
 
 [tabindex="-1"]:focus {
@@ -1296,10 +1293,6 @@ html {
     -webkit-text-size-adjust: 100%;
 }
 
-body {
-    margin: 0;
-}
-
 article,
 aside,
 details,
@@ -1617,14 +1610,6 @@ html {
     font-size: 16px;
     -ms-overflow-style: scrollbar;
     -webkit-tap-highlight-color: transparent;
-}
-
-body {
-    font-family: "Roboto", "Helvetica", sans-serif;
-    font-size: 1rem;
-    line-height: 1.5;
-    color: #373a3c;
-    background-color: #fff;
 }
 
 [tabindex="-1"]:focus {
@@ -8238,7 +8223,7 @@ a:hover {
     }
 
 .action-button--secondary {
-    background: #e7e7e7;
+    background: #e0e0e0;
     border: 0;
     box-shadow: none;
     color: #4A4A4A;
@@ -8412,9 +8397,9 @@ strong {
 }
 
 .currency-selection {
-    border-bottom: 1px solid #E9E9E9;
+    border-bottom: 1px solid #e0e0e0;
     position: relative;
-    padding: 4px 15px;
+    padding: 4px 10px 4px 15px;
     display: flex;
     font-weight: 300;
     color: #565D6E;
@@ -8531,7 +8516,7 @@ strong {
 .payment-tabs {
     position: relative;
     background: #fff;
-    border-top: 1px solid #E9E9E9;
+    border-top: 1px solid #e0e0e0;
     display: flex;
     font-size: 13.5px;
     box-shadow: 0px 5px 7px 0px rgba(0, 0, 0, 0.09);
@@ -8620,7 +8605,7 @@ strong {
         margin-top: 15px;
         padding: 15px;
         background-color: #ffffff;
-        border: 1px solid #E9E9E9;
+        border: 1px solid #e0e0e0;
         border-radius: 5px;
         width: 100%;
         max-height: 300px;
@@ -8716,7 +8701,7 @@ strong {
 
 .manual-box.underpaid-expired__refund-pending > .manual-box__amount {
     transition: all 250ms cubic-bezier(0.4, 0, 1, 1);
-    border-top-color: #E9E9E9;
+    border-top-color: #e0e0e0;
     border-top-right-radius: 5px;
     border-top-left-radius: 5px;
 }
@@ -8737,7 +8722,7 @@ strong {
     padding-bottom: .7rem;
     border-top-left-radius: 5px;
     border-top-right-radius: 5px;
-    border: 1px solid #E9E9E9;
+    border: 1px solid #e0e0e0;
     border-bottom: 0;
     max-height: 300px;
 }
@@ -8752,7 +8737,7 @@ strong {
     text-align: center;
     position: relative;
     border-radius: 5px;
-    border: 1px solid #E9E9E9;
+    border: 1px solid #e0e0e0;
 }
 
 .flipped .manual-box__amount {
@@ -8791,8 +8776,8 @@ strong {
     height: 10px;
     width: 10px;
     left: 50%;
-    border-right: 1px solid #E9E9E9;
-    border-bottom: 1px solid #E9E9E9;
+    border-right: 1px solid #e0e0e0;
+    border-bottom: 1px solid #e0e0e0;
     transform: rotate(45deg);
     margin-left: -5px;
     bottom: -6px;
@@ -8815,8 +8800,8 @@ strong {
     height: 10px;
     width: 10px;
     left: 50%;
-    border-right: 1px solid #E9E9E9;
-    border-bottom: 1px solid #E9E9E9;
+    border-right: 1px solid #e0e0e0;
+    border-bottom: 1px solid #e0e0e0;
     transform: rotateZ(45deg);
     margin-left: -5px;
     top: -5px;
@@ -8828,7 +8813,7 @@ strong {
 .manual-box__address > .flipper {
     backface-visibility: hidden;
     height: 100%;
-    border: 1px solid #E9E9E9;
+    border: 1px solid #e0e0e0;
     border-top: 0;
     border-bottom-left-radius: 5px;
     border-bottom-right-radius: 5px;
@@ -9084,11 +9069,12 @@ strong {
 
 .close-icon {
     flex-grow: 1;
-    display: flex;
+    display: none;
     justify-content: flex-end;
     padding: 13px;
     transition: opacity 250ms ease;
     opacity: 1;
+    cursor: pointer;
 }
 
     .close-icon img {
@@ -9169,7 +9155,7 @@ strong {
 }
 
 .bp-input {
-    border: 1px solid #E9E9E9;
+    border: 1px solid #e0e0e0;
     border-radius: 2px;
     font-size: 15px;
     font-weight: 400;
@@ -9236,7 +9222,7 @@ strong {
     }
 
     .bp-view.scan {
-        padding-top: .9em !important;
+        padding-top: 0em !important;
     }
 
     .bp-view:not(.active) {
@@ -9376,11 +9362,67 @@ strong {
     border-bottom: 1px dotted;
 }
 
+.wrapBtnGroup {
+    text-align: center;
+    margin: -2px 0px 12px;
+    padding: 0 15px;
+}
+
+.btnGroupLnd {
+    margin: 0 auto;
+    text-align: center;
+    width: inherit;
+    display: table;
+    background-color: #fff;
+    color: #000;
+    font-size: 0px;
+    width: 100%;
+}
+
+    .btnGroupLnd button:first-child {
+        border-top-left-radius: 5px;
+        border-bottom-left-radius: 5px;
+        border-right: 0px;
+    }
+
+    .btnGroupLnd button:last-child {
+        border-top-right-radius: 5px;
+        border-bottom-right-radius: 5px;
+    }
+
+    .btnGroupLnd button {
+        display: table-cell;
+        border: solid 1px #24725B;
+        padding: 6px 9px;
+        margin: 0px;
+        font-size: 12px;
+        width: 50%;
+        text-overflow: ellipsis;
+        overflow: hidden;
+        white-space: nowrap;
+    }
+
+        .btnGroupLnd button:hover {
+            background-color: #eeffee;
+        }
+
+        .btnGroupLnd button.active {
+            background-color: #329F80;
+            border-color: #329F80;
+            color: #fff;
+        }
+
+            .btnGroupLnd button.active:hover {
+                background-color: #24725B;
+                border-color: #24725B;
+                color: #fff;
+            }
+
 .payment__details__instruction__open-wallet {
     display: block;
     margin-left: auto;
     margin-right: auto;
-    margin: 15px 15px 18px;
+    margin: 0px 15px 18px;
     text-align: center;
 }
 
@@ -9402,7 +9444,14 @@ strong {
 .payment__scan {
     position: relative;
     text-align: center;
+    height: 256px;
+    margin-bottom: 5px;
 }
+
+    .payment__scan svg {
+        width: 256px;
+        height: 256px;
+    }
 
 .payment__scan__checkmark-wrapper {
     display: flex;
@@ -9440,7 +9489,7 @@ strong {
 .payment__scan__qrcode img {
     padding: 15px;
     background-color: #ffffff;
-    border: 1px solid #E9E9E9;
+    border: 1px solid #e0e0e0;
     border-radius: 5px;
 }
 
@@ -9672,7 +9721,7 @@ strong {
     background: #fff;
     padding: 30px 15px;
     text-align: center;
-    border: 1px solid #E9E9E9;
+    border: 1px solid #e0e0e0;
     border-radius: 5px;
     margin: -5px 0 18px;
     font-weight: 300;
@@ -10317,7 +10366,7 @@ All mobile class names should be prefixed by m- */
 }
 
 .paid:not(.paid-over) .status-icon {
-    padding-top: 54px;
+    padding-top: 45px;
 }
 
 .paid:not(.paid-over) .button-wrapper {
@@ -10939,6 +10988,15 @@ bp-spinner {
         opacity: .85;
     }
 
+.general__spinner > bp-spinner > svg {
+    margin: auto 0px 0px auto;
+    height: 32px;
+    width: 32px;
+    fill: gray;
+    animation: spin 0.55s linear infinite;
+    opacity: .85;
+}
+
 bp-refund-address.ng-valid .bitcoin-logo {
     opacity: 1;
     margin-left: 0;
@@ -11144,6 +11202,16 @@ language-selector {
         opacity: 1;
     }
 
+
+.extraPayment {
+    background: #E5465A;
+    color: #fff;
+    font-weight: 500;
+    letter-spacing: .5px;
+    font-size: 12px;
+    padding: 2px 1rem;
+}
+
 line-items {
     background: #FBFBFB;
     border-top: 1px solid rgba(238, 238, 238, 0.5);
@@ -11284,7 +11352,7 @@ low-fee-timeline {
     text-align: center;
     position: relative;
     border-radius: 5px;
-    border: 1px solid #E9E9E9;
+    border: 1px solid #e0e0e0;
     background: #fff;
 }
 
@@ -11302,7 +11370,7 @@ low-fee-timeline {
     }
 
     .copySectionBox.bottomBorder {
-        border-bottom: 1px solid #e9e9e9;
+        border-bottom: 1px solid #e0e0e0;
     }
 
 .separatorGem {
@@ -11310,8 +11378,8 @@ low-fee-timeline {
     height: 10px;
     width: 10px;
     left: 50%;
-    border-right: 1px solid #E9E9E9;
-    border-bottom: 1px solid #E9E9E9;
+    border-right: 1px solid #e0e0e0;
+    border-bottom: 1px solid #e0e0e0;
     transform: rotateZ(45deg);
     margin-left: -5px;
     top: -5px;
@@ -11323,7 +11391,7 @@ low-fee-timeline {
 
 .checkoutTextbox {
     width: 100%;
-    border: 1px solid #e9e9e9;
+    border: 1px solid #e0e0e0;
     border-radius: 4px;
     outline: none;
     padding: 8px 4px 8px;
@@ -11351,7 +11419,7 @@ low-fee-timeline {
         color: #aaa;
         height: 16px;
         padding: 0px 4px;
-        border-right: 1px solid #e9e9e9;
+        border-right: 1px solid #e0e0e0;
     }
 
     .inputWithIcon.inputIconBg img {
@@ -11402,4 +11470,73 @@ low-fee-timeline {
         pointer-events: auto;
         opacity: 1;
         transition: opacity 1s ease;
+    }
+
+.changelly-component {
+    position: relative;
+}
+
+.changelly-component-dropdown-holder {
+    height: 32px;
+    margin-bottom: 10px;
+}
+
+.changelly-component .general__spinner bp-spinner {
+    width: 50px;
+    height: 50px;
+}
+
+    .changelly-component .general__spinner bp-spinner svg {
+        margin: 0;
+    }
+
+.changelly-component .retry-button {
+    border-radius: 5px;
+    border: 1px solid #a9a9a9;
+    background: #fff;
+    color: #000;
+    min-width: 100px;
+    padding-left: 0.8rem;
+    padding-right: 0.8rem;
+    min-height: 30px;
+    word-break: break-all;
+}
+
+    .changelly-component .retry-button :hover {
+        border-color: #7f7f7f;
+    }
+
+.changelly-component .prettydropdown li img {
+    width: 20px;
+    margin-right: 5px;
+}
+
+
+#prettydropdown-DefaultLang {
+    min-width: 200px;
+}
+
+    #prettydropdown-DefaultLang ul {
+        width: 100%;
+    }
+
+        #prettydropdown-DefaultLang ul li {
+            width: 100% !important;
+        }
+
+[v-cloak] > * {
+    display: none
+}
+
+[v-cloak]::before {
+    content: ""
+}
+
+
+.btn-link {
+    color: #329F80;
+}
+
+    .btn-link:hover {
+        color: #24725B;
     }

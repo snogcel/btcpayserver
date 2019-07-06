@@ -24,13 +24,13 @@ namespace BTCPayServer.HostedServices
     {
         public class NBXplorerSummary
         {
-            public BTCPayNetwork Network { get; set; }
+            public BTCPayNetworkBase Network { get; set; }
             public NBXplorerState State { get; set; }
             public StatusResult Status { get; set; }
             public string Error { get; set; }
         }
         ConcurrentDictionary<string, NBXplorerSummary> _Summaries = new ConcurrentDictionary<string, NBXplorerSummary>();
-        public void Publish(BTCPayNetwork network, NBXplorerState state, StatusResult status, string error)
+        public void Publish(BTCPayNetworkBase network, NBXplorerState state, StatusResult status, string error)
         {
             var summary = new NBXplorerSummary() { Network = network, State = state, Status = status, Error = error };
             _Summaries.AddOrUpdate(network.CryptoCode, summary, (k, v) => summary);
@@ -43,11 +43,15 @@ namespace BTCPayServer.HostedServices
 
         public bool IsFullySynched(string cryptoCode, out NBXplorerSummary summary)
         {
-            return _Summaries.TryGetValue(cryptoCode, out summary) && 
+            return _Summaries.TryGetValue(cryptoCode.ToUpperInvariant(), out summary) && 
                    summary.Status != null && 
                    summary.Status.IsFullySynched;
         }
-
+        public NBXplorerSummary Get(string cryptoCode)
+        {
+            _Summaries.TryGetValue(cryptoCode.ToUpperInvariant(), out var summary);
+            return summary;
+        }
         public IEnumerable<NBXplorerSummary> GetAll()
         {
             return _Summaries.Values;

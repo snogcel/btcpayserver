@@ -2,7 +2,6 @@
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Rates;
 using BTCPayServer.Validation;
-using BTCPayServer.Validations;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using System;
 using System.Collections.Generic;
@@ -19,8 +18,15 @@ namespace BTCPayServer.Models.StoreViewModels
             public string Crypto { get; set; }
             public string Value { get; set; }
             public WalletId WalletId { get; set; }
+            public bool Enabled { get; set; }
         }
-
+        
+        public class ThirdPartyPaymentMethod
+        {
+            public string Provider { get; set; }
+            public bool Enabled { get; set; }
+            public string Action { get; set; }
+        }
         public StoreViewModel()
         {
 
@@ -46,7 +52,13 @@ namespace BTCPayServer.Models.StoreViewModels
             set;
         }
 
+        [Display(Name = "Allow anyone to create invoice")]
+        public bool AnyoneCanCreateInvoice { get; set; }
+
         public List<StoreViewModel.DerivationScheme> DerivationSchemes { get; set; } = new List<StoreViewModel.DerivationScheme>();
+
+        public List<ThirdPartyPaymentMethod> ThirdPartyPaymentMethods { get; set; } =
+            new List<ThirdPartyPaymentMethod>();
 
         [Display(Name = "Invoice expires if the full amount has not been paid after ... minutes")]
         [Range(1, 60 * 24 * 24)]
@@ -70,8 +82,8 @@ namespace BTCPayServer.Models.StoreViewModels
             get; set;
         }
 
-        [Display(Name = "Add network fee to invoice (vary with mining fees)")]
-        public bool NetworkFee
+        [Display(Name = "Add additional fee (network fee) to invoice...")]
+        public Data.NetworkFeeMode NetworkFeeMode
         {
             get; set;
         }
@@ -83,6 +95,7 @@ namespace BTCPayServer.Models.StoreViewModels
         {
             public string CryptoCode { get; set; }
             public string Address { get; set; }
+            public bool Enabled { get; set; }
         }
         public List<LightningNode> LightningNodes
         {

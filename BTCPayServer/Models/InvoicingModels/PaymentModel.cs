@@ -20,10 +20,11 @@ namespace BTCPayServer.Models.InvoicingModels
         public string CustomCSSLink { get; set; }
         public string CustomLogoLink { get; set; }
         public string DefaultLang { get; set; }
+        public bool LightningAmountInSatoshi { get; set; }
         public List<AvailableCrypto> AvailableCryptos { get; set; } = new List<AvailableCrypto>();
+        public bool IsModal { get; set; }
         public bool IsLightning { get; set; }
         public string CryptoCode { get; set; }
-        public string ServerUrl { get; set; }
         public string InvoiceId { get; set; }
         public string BtcAddress { get; set; }
         public string BtcDue { get; set; }
@@ -55,7 +56,17 @@ namespace BTCPayServer.Models.InvoicingModels
         public string PaymentMethodName { get; set; }
         public string CryptoImage { get; set; }
 
-        public bool AllowCoinConversion { get; set; }
+        public bool ChangellyEnabled { get; set; }
+        public string StoreId { get; set; }
         public string PeerInfo { get; set; }
+        public string ChangellyMerchantId { get; set; }
+        public decimal? ChangellyAmountDue { get; set; }
+        
+        public bool CoinSwitchEnabled { get; set; }
+        public string CoinSwitchMode { get; set; }
+        public string CoinSwitchMerchantId { get; set; }
+        public string RootPath { get; set; }
+        public decimal CoinSwitchAmountMarkupPercentage { get; set; }
+        public bool RedirectAutomatically { get; set; }
     }
 }

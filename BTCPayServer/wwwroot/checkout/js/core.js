@@ -20,11 +20,18 @@ function resetTabsSlider() {
     closePaymentMethodDialog(null);
 }
 
-function onDataCallback(jsonData) {
-    // extender properties used 
-    jsonData.shapeshiftUrl = "https://shapeshift.io/shifty.html?destination=" + jsonData.btcAddress + "&output=" + jsonData.paymentMethodId + "&amount=" + jsonData.btcDue;
-    //
+function changeCurrency(currency) {
+    if (currency !== null && srvModel.paymentMethodId !== currency) {
+        $(".payment__currencies").hide();
+        $(".payment__spinner").show();
+        checkoutCtrl.scanDisplayQr = "";
+        srvModel.paymentMethodId = currency;
+        fetchStatus();
+    }
+    return false;
+}
 
+function onDataCallback(jsonData) {
     var newStatus = jsonData.status;
 
     if (newStatus === "complete" ||
@@ -39,6 +46,12 @@ function onDataCallback(jsonData) {
 
         resetTabsSlider();
         $("#paid").addClass("active");
+        if (!jsonData.isModal && jsonData.redirectAutomatically && jsonData.merchantRefLink) {
+            $(".payment__spinner").show();
+            setTimeout(function () {
+                window.location = jsonData.merchantRefLink;
+            }, 2000);
+        }
     }
 
     if (newStatus === "expired" || newStatus === "invalid") { //TODO: different state if the invoice is invalid (failed to confirm after timeout)
@@ -61,29 +74,58 @@ function onDataCallback(jsonData) {
     }
 
     // restoring qr code view only when currency is switched
+    if (jsonData.paymentMethodId === srvModel.paymentMethodId &&
+        checkoutCtrl.scanDisplayQr === "") {
+        checkoutCtrl.scanDisplayQr = jsonData.invoiceBitcoinUrlQR;
+    }
+
     if (jsonData.paymentMethodId === srvModel.paymentMethodId) {
         $(".payment__currencies").show();
         $(".payment__spinner").hide();
+    }
+
+    if (jsonData.isLightning && checkoutCtrl.lndModel === null) {
+        var lndModel = {
+            toggle: 0
+        };
+
+        checkoutCtrl.lndModel = lndModel;
+    }
+
+    if (!jsonData.isLightning) {
+        checkoutCtrl.lndModel = null;
+    }
+
+    // displaying satoshis for lightning payments
+    jsonData.cryptoCodeSrv = jsonData.cryptoCode;
+    if (jsonData.isLightning && checkoutCtrl.lightningAmountInSatoshi && jsonData.cryptoCode === "BTC") {
+        var SATOSHIME = 100000000;
+        jsonData.cryptoCode = "Sats";
+        jsonData.btcDue = numberFormatted(jsonData.btcDue * SATOSHIME);
+        jsonData.btcPaid = numberFormatted(jsonData.btcPaid * SATOSHIME);
+        jsonData.networkFee = numberFormatted(jsonData.networkFee * SATOSHIME);
+        jsonData.orderAmount = numberFormatted(jsonData.orderAmount * SATOSHIME);
+    }
+
+    // expand line items to show details on amount due for multi-transaction payment
+    if (checkoutCtrl.srvModel.txCount === 1 && jsonData.txCount > 1) {
+        onlyExpandLineItems();
     }
 
     // updating ui
     checkoutCtrl.srvModel = jsonData;
 }
 
-function changeCurrency(currency) {
-    if (currency !== null && srvModel.paymentMethodId !== currency) {
-        $(".payment__currencies").hide();
-        $(".payment__spinner").show();
-        srvModel.paymentMethodId = currency;
-        fetchStatus();
-    }
-    return false;
+function numberFormatted(x) {
+    var rounded = Math.round(x);
+    var parts = rounded.toString().split(".");
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+    return parts.join(".");
 }
 
 function fetchStatus() {
-    var path = srvModel.serverUrl + "/i/" + srvModel.invoiceId + "/" + srvModel.paymentMethodId + "/status";
     $.ajax({
-        url: path,
+        url: window.location.pathname + "/status?invoiceId=" + srvModel.invoiceId + "&paymentMethodId=" + srvModel.paymentMethodId,
         type: "GET",
         cache: false
     }).done(function (data) {
@@ -93,36 +135,70 @@ function fetchStatus() {
     });
 }
 
+function lndToggleBolt11() {
+    checkoutCtrl.lndModel.toggle = 0;
+    checkoutCtrl.scanDisplayQr = checkoutCtrl.srvModel.invoiceBitcoinUrlQR;
+}
+
+function lndToggleNode() {
+    checkoutCtrl.lndModel.toggle = 1;
+    checkoutCtrl.scanDisplayQr = checkoutCtrl.srvModel.peerInfo;
+}
+
+var lineItemsExpanded = false;
+function toggleLineItems() {
+    $("line-items").toggleClass("expanded");
+    lineItemsExpanded ? $("line-items").slideUp() : $("line-items").slideDown();
+    lineItemsExpanded = !lineItemsExpanded;
+
+    $(".buyerTotalLine").toggleClass("expanded");
+    $(".single-item-order__right__btc-price__chevron").toggleClass("expanded");
+}
+
+function onlyExpandLineItems() {
+    if (!lineItemsExpanded) {
+        toggleLineItems();
+    }
+}
+
+
 // private methods
 $(document).ready(function () {
     // initialize
     onDataCallback(srvModel);
-
-    /* TAF
-    
-    - Version mobile
-    
-    - Réparer le décallage par timer
-    
-    - Preparer les variables de l'API
-    
-    - Gestion des differents evenements en fonction du status de l'invoice
-    
-    - sécuriser les CDN
-    
-    */
+    // initial expand of line items to show error message if multiple payments needed
+    if (srvModel.status === "new" && srvModel.txCount > 1) {
+        onlyExpandLineItems();
+    }
 
     // check if the Document expired
     if (srvModel.expirationSeconds > 0) {
         progressStart(srvModel.maxTimeSeconds); // Progress bar
 
         if (srvModel.requiresRefundEmail && !validateEmail(srvModel.customerEmail))
-            emailForm(); // Email form Display
+            showEmailForm();
         else
             hideEmailForm();
     }
 
+    $(".close-action").on("click", function () {
+        $("invoice").fadeOut(300, function () {
+            window.parent.postMessage("close", "*");
+        });
+    });
 
+    window.parent.postMessage("loaded", "*");
+    jQuery("invoice").fadeOut(0);
+    jQuery("invoice").fadeIn(300);
+
+    // eof initialize
+    
+    // Expand Line-Items
+    $(".buyerTotalLine").click(function () {
+        toggleLineItems();
+    });
+
+    // FUNCTIONS
     function hideEmailForm() {
         $("#emailAddressView").removeClass("active");
         $("placeholder-refundEmail").html(srvModel.customerEmail);
@@ -133,7 +209,7 @@ $(document).ready(function () {
     }
     // Email Form
     // Setup Email mode
-    function emailForm() {
+    function showEmailForm() {
         $(".modal-dialog").addClass("enter-purchaser-email");
 
         $("#emailAddressForm .action-button").click(function () {
@@ -142,11 +218,8 @@ $(document).ready(function () {
                 $("#emailAddressForm .input-wrapper bp-loading-button .action-button").addClass("loading");
                 // Push the email to a server, once the reception is confirmed move on
                 srvModel.customerEmail = emailAddress;
-
-                var path = srvModel.serverUrl + "/i/" + srvModel.invoiceId + "/UpdateCustomer";
-
                 $.ajax({
-                    url: path,
+                    url: window.location.pathname + "/UpdateCustomer?invoiceId=" + srvModel.invoiceId,
                     type: "POST",
                     data: JSON.stringify({ Email: srvModel.customerEmail }),
                     contentType: "application/json; charset=utf-8"
@@ -216,15 +289,24 @@ $(document).ready(function () {
     // Should connect using webhook ?
     // If notification received
 
+    var socket = null;
     var supportsWebSockets = 'WebSocket' in window && window.WebSocket.CLOSING === 2;
     if (supportsWebSockets) {
-        var path = srvModel.serverUrl + "/i/" + srvModel.invoiceId + "/status/ws";
-        path = path.replace("https://", "wss://");
-        path = path.replace("http://", "ws://");
+        var loc = window.location, ws_uri;
+        if (loc.protocol === "https:") {
+            ws_uri = "wss:";
+        } else {
+            ws_uri = "ws:";
+        }
+        ws_uri += "//" + loc.host;
+        ws_uri += loc.pathname + "/status/ws?invoiceId=" + srvModel.invoiceId;
         try {
-            var socket = new WebSocket(path);
+            socket = new WebSocket(ws_uri);
             socket.onmessage = function (e) {
                 fetchStatus();
+            };
+            socket.onerror = function (e) {
+                console.error("Error while connecting to websocket for invoice notifications (callback)");
             };
         }
         catch (e) {
@@ -233,7 +315,9 @@ $(document).ready(function () {
     }
 
     var watcher = setInterval(function () {
-        fetchStatus();
+        if (socket === null || socket.readyState !== 1) {
+            fetchStatus();
+        }
     }, 2000);
 
     $(".menu__item").click(function () {
@@ -242,17 +326,6 @@ $(document).ready(function () {
         language();
         $(".selector span").text($(".selected").text());
         // function to load contents in different language should go there
-    });
-
-    // Expand Line-Items
-    var lineItemsExpanded = false;
-    $(".buyerTotalLine").click(function () {
-        $("line-items").toggleClass("expanded");
-        lineItemsExpanded ? $("line-items").slideUp() : $("line-items").slideDown();
-        lineItemsExpanded = !lineItemsExpanded;
-
-        $(".buyerTotalLine").toggleClass("expanded");
-        $(".single-item-order__right__btc-price__chevron").toggleClass("expanded");
     });
 
     // Timer Countdown && Progress bar

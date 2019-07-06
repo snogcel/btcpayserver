@@ -18,10 +18,12 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Threading;
 using System.Globalization;
-using BTCPayServer.Payments.Lightning.CLightning;
-using BTCPayServer.Payments.Lightning.Charge;
 using BTCPayServer.Tests.Lnd;
 using BTCPayServer.Payments.Lightning;
+using BTCPayServer.Lightning.CLightning;
+using BTCPayServer.Lightning;
+using BTCPayServer.Services;
+using BTCPayServer.Tests.Logging;
 
 namespace BTCPayServer.Tests
 {
@@ -42,15 +44,16 @@ namespace BTCPayServer.Tests
                 Directory.CreateDirectory(_Directory);
 
             NetworkProvider = new BTCPayNetworkProvider(NetworkType.Regtest);
-            ExplorerNode = new RPCClient(RPCCredentialString.Parse(GetEnvironment("TESTS_BTCRPCCONNECTION", "server=http://127.0.0.1:43782;ceiwHEbqWI83:DwubwWsoo3")), NetworkProvider.GetNetwork("BTC").NBitcoinNetwork);
-            LTCExplorerNode = new RPCClient(RPCCredentialString.Parse(GetEnvironment("TESTS_LTCRPCCONNECTION", "server=http://127.0.0.1:43783;ceiwHEbqWI83:DwubwWsoo3")), NetworkProvider.GetNetwork("LTC").NBitcoinNetwork);
+            ExplorerNode = new RPCClient(RPCCredentialString.Parse(GetEnvironment("TESTS_BTCRPCCONNECTION", "server=http://127.0.0.1:43782;ceiwHEbqWI83:DwubwWsoo3")), NetworkProvider.GetNetwork<BTCPayNetwork>("BTC").NBitcoinNetwork);
+            ExplorerNode.ScanRPCCapabilities();
+            LTCExplorerNode = new RPCClient(RPCCredentialString.Parse(GetEnvironment("TESTS_LTCRPCCONNECTION", "server=http://127.0.0.1:43783;ceiwHEbqWI83:DwubwWsoo3")), NetworkProvider.GetNetwork<BTCPayNetwork>("LTC").NBitcoinNetwork);
 
-            ExplorerClient = new ExplorerClient(NetworkProvider.GetNetwork("BTC").NBXplorerNetwork, new Uri(GetEnvironment("TESTS_BTCNBXPLORERURL", "http://127.0.0.1:32838/")));
-            LTCExplorerClient = new ExplorerClient(NetworkProvider.GetNetwork("LTC").NBXplorerNetwork, new Uri(GetEnvironment("TESTS_LTCNBXPLORERURL", "http://127.0.0.1:32838/")));
+            ExplorerClient = new ExplorerClient(NetworkProvider.GetNetwork<BTCPayNetwork>("BTC").NBXplorerNetwork, new Uri(GetEnvironment("TESTS_BTCNBXPLORERURL", "http://127.0.0.1:32838/")));
+            LTCExplorerClient = new ExplorerClient(NetworkProvider.GetNetwork<BTCPayNetwork>("LTC").NBXplorerNetwork, new Uri(GetEnvironment("TESTS_LTCNBXPLORERURL", "http://127.0.0.1:32838/")));
 
-            var btc = NetworkProvider.GetNetwork("BTC").NBitcoinNetwork;
-            CustomerLightningD = (CLightningRPCClient)LightningClientFactory.CreateClient(GetEnvironment("TEST_CUSTOMERLIGHTNINGD", "type=clightning;server=tcp://127.0.0.1:30992/"), btc);
-            MerchantLightningD = (CLightningRPCClient)LightningClientFactory.CreateClient(GetEnvironment("TEST_MERCHANTLIGHTNINGD", "type=clightning;server=tcp://127.0.0.1:30993/"), btc);
+            var btc = NetworkProvider.GetNetwork<BTCPayNetwork>("BTC").NBitcoinNetwork;
+            CustomerLightningD = LightningClientFactory.CreateClient(GetEnvironment("TEST_CUSTOMERLIGHTNINGD", "type=clightning;server=tcp://127.0.0.1:30992/"), btc);
+            MerchantLightningD = LightningClientFactory.CreateClient(GetEnvironment("TEST_MERCHANTLIGHTNINGD", "type=clightning;server=tcp://127.0.0.1:30993/"), btc);
 
             MerchantCharge = new ChargeTester(this, "TEST_MERCHANTCHARGE", "type=charge;server=http://127.0.0.1:54938/;api-token=foiewnccewuify", "merchant_lightningd", btc);
 
@@ -60,7 +63,9 @@ namespace BTCPayServer.Tests
             {
                 NBXplorerUri = ExplorerClient.Address,
                 LTCNBXplorerUri = LTCExplorerClient.Address,
+                TestDatabase = Enum.Parse<TestDatabases>(GetEnvironment("TESTS_DB", TestDatabases.Postgres.ToString()), true),
                 Postgres = GetEnvironment("TESTS_POSTGRES", "User ID=postgres;Host=127.0.0.1;Port=39372;Database=btcpayserver"),
+                MySQL = GetEnvironment("TESTS_MYSQL", "User ID=root;Host=127.0.0.1;Port=33036;Database=btcpayserver"),
                 IntegratedLightning = MerchantCharge.Client.Uri
             };
             PayTester.Port = int.Parse(GetEnvironment("TESTS_PORT", Utils.FreeTcpPort().ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
@@ -78,88 +83,26 @@ namespace BTCPayServer.Tests
             PayTester.Start();
         }
 
-
-        /// <summary>
-        /// Connect a customer LN node to the merchant LN node
-        /// </summary>
-        public void PrepareLightning(LightningConnectionType lndBackend)
-        {
-            ILightningInvoiceClient client = MerchantCharge.Client;
-            if (lndBackend == LightningConnectionType.LndREST)
-                client = MerchantLnd.Client;
-
-            PrepareLightningAsync(client).GetAwaiter().GetResult();
-        }
-
-
-        private static readonly string[] SKIPPED_STATES =
-            { "ONCHAIN", "CHANNELD_SHUTTING_DOWN", "CLOSINGD_SIGEXCHANGE", "CLOSINGD_COMPLETE", "FUNDING_SPEND_SEEN" };
-
         /// <summary>
         /// Connect a customer LN node to the merchant LN node
         /// </summary>
         /// <returns></returns>
-        private async Task PrepareLightningAsync(ILightningInvoiceClient client)
+        public async Task EnsureChannelsSetup()
         {
-            bool awaitingLocking = false;
-            while (true)
-            {
-                var merchantInfo = await WaitLNSynched(client, CustomerLightningD, MerchantLightningD);
-
-                var peers = await CustomerLightningD.ListPeersAsync();
-                var filteringToTargetedPeers = peers.Where(a => a.Id == merchantInfo.NodeId);
-                var channel = filteringToTargetedPeers
-                            .SelectMany(p => p.Channels)
-                            .Where(c => !SKIPPED_STATES.Contains(c.State ?? ""))
-                            .FirstOrDefault();
-
-                switch (channel?.State)
-                {
-                    case null:
-                        var address = await CustomerLightningD.NewAddressAsync();
-                        await ExplorerNode.SendToAddressAsync(address, Money.Coins(0.5m));
-                        ExplorerNode.Generate(1);
-                        await WaitLNSynched(client, CustomerLightningD, MerchantLightningD);
-                        await Task.Delay(1000);
-
-                        var merchantNodeInfo = new NodeInfo(merchantInfo.NodeId, merchantInfo.Address, merchantInfo.P2PPort);
-                        await CustomerLightningD.ConnectAsync(merchantNodeInfo);
-                        await CustomerLightningD.FundChannelAsync(merchantNodeInfo, Money.Satoshis(16777215));
-                        break;
-                    case "CHANNELD_AWAITING_LOCKIN":
-                        ExplorerNode.Generate(awaitingLocking ? 1 : 10);
-                        await WaitLNSynched(client, CustomerLightningD, MerchantLightningD);
-                        awaitingLocking = true;
-                        break;
-                    case "CHANNELD_NORMAL":
-                        return;
-                    default:
-                        throw new NotSupportedException(channel?.State ?? "");
-                }
-            }
+            Logs.Tester.LogInformation("Connecting channels");
+            await BTCPayServer.Lightning.Tests.ConnectChannels.ConnectAll(ExplorerNode, GetLightningSenderClients(), GetLightningDestClients()).ConfigureAwait(false);
+            Logs.Tester.LogInformation("Channels connected");
         }
 
-        private async Task<LightningNodeInformation> WaitLNSynched(params ILightningInvoiceClient[] clients)
+        private IEnumerable<ILightningClient> GetLightningSenderClients()
         {
-            while (true)
-            {
-                var blockCount = await ExplorerNode.GetBlockCountAsync();
-                var synching = clients.Select(c => WaitLNSynchedCore(blockCount, c)).ToArray();
-                await Task.WhenAll(synching);
-                if (synching.All(c => c.Result != null))
-                    return synching[0].Result;
-                await Task.Delay(1000);
-            }
+            yield return CustomerLightningD;
         }
 
-        private async Task<LightningNodeInformation> WaitLNSynchedCore(int blockCount, ILightningInvoiceClient client)
+        private IEnumerable<ILightningClient> GetLightningDestClients()
         {
-            var merchantInfo = await client.GetInfo();
-            if (merchantInfo.BlockHeight == blockCount)
-            {
-                return merchantInfo;
-            }
-            return null;
+            yield return MerchantLightningD;
+            yield return MerchantLnd.Client;
         }
 
         public void SendLightningPayment(Invoice invoice)
@@ -171,12 +114,12 @@ namespace BTCPayServer.Tests
         {
             var bolt11 = invoice.CryptoInfo.Where(o => o.PaymentUrls.BOLT11 != null).First().PaymentUrls.BOLT11;
             bolt11 = bolt11.Replace("lightning:", "", StringComparison.OrdinalIgnoreCase);
-            await CustomerLightningD.SendAsync(bolt11);
+            await CustomerLightningD.Pay(bolt11);
         }
 
-        public CLightningRPCClient CustomerLightningD { get; set; }
+        public ILightningClient CustomerLightningD { get; set; }
 
-        public CLightningRPCClient MerchantLightningD { get; private set; }
+        public ILightningClient MerchantLightningD { get; private set; }
         public ChargeTester MerchantCharge { get; private set; }
         public LndMockTester MerchantLnd { get; set; }
 
@@ -214,11 +157,12 @@ namespace BTCPayServer.Tests
         {
             get; set;
         }
+
         public List<string> Stores { get; internal set; } = new List<string>();
 
         public void Dispose()
         {
-            foreach(var store in Stores)
+            foreach (var store in Stores)
             {
                 Xunit.Assert.True(PayTester.StoreRepository.DeleteStore(store).GetAwaiter().GetResult());
             }

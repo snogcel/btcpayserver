@@ -32,6 +32,8 @@ using System.Globalization;
 using BTCPayServer.Services;
 using BTCPayServer.Data;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using NBXplorer.DerivationStrategy;
+using System.Net;
 
 namespace BTCPayServer
 {
@@ -60,9 +62,26 @@ namespace BTCPayServer
             }
             return value;
         }
+        public static decimal RoundToSignificant(this decimal value, ref int divisibility)
+        {
+            if (value != 0m)
+            {
+                while (true)
+                {
+                    var rounded = decimal.Round(value, divisibility, MidpointRounding.AwayFromZero);
+                    if ((Math.Abs(rounded - value) / value) < 0.001m)
+                    {
+                        value = rounded;
+                        break;
+                    }
+                    divisibility++;
+                }
+            }
+            return value;
+        }
         public static PaymentMethodId GetpaymentMethodId(this InvoiceCryptoInfo info)
         {
-            return new PaymentMethodId(info.CryptoCode, Enum.Parse<PaymentTypes>(info.PaymentType));
+            return new PaymentMethodId(info.CryptoCode, PaymentTypes.Parse(info.PaymentType));
         }
         public static async Task CloseSocket(this WebSocket webSocket)
         {
@@ -107,6 +126,18 @@ namespace BTCPayServer
                 return str;
             return str + "/";
         }
+        public static string WithStartingSlash(this string str)
+        {
+            if (str.StartsWith("/", StringComparison.InvariantCulture))
+                return str;
+            return $"/{str}";
+        }
+        public static string WithoutEndingSlash(this string str)
+        {
+            if (str.EndsWith("/", StringComparison.InvariantCulture))
+                return str.Substring(0, str.Length - 1);
+            return str;
+        }
 
         public static void SetHeaderOnStarting(this HttpResponse resp, string name, string value)
         {
@@ -128,6 +159,44 @@ namespace BTCPayServer
                 resp.Headers[name] = value;
         }
 
+        public static bool IsSegwit(this DerivationStrategyBase derivationStrategyBase)
+        {
+            if (IsSegwitCore(derivationStrategyBase))
+                return true;
+            return (derivationStrategyBase is P2SHDerivationStrategy p2shStrat && IsSegwitCore(p2shStrat.Inner));
+        }
+
+        private static bool IsSegwitCore(DerivationStrategyBase derivationStrategyBase)
+        {
+            return (derivationStrategyBase is P2WSHDerivationStrategy) ||
+                            (derivationStrategyBase is DirectDerivationStrategy direct) && direct.Segwit;
+        }
+
+        public static bool IsLocalNetwork(string server)
+        {
+            if (server == null)
+                throw new ArgumentNullException(nameof(server));
+            if (Uri.CheckHostName(server) == UriHostNameType.Dns)
+            {
+                return server.EndsWith(".internal", StringComparison.OrdinalIgnoreCase) ||
+                   server.EndsWith(".local", StringComparison.OrdinalIgnoreCase) ||
+                   server.EndsWith(".lan", StringComparison.OrdinalIgnoreCase) ||
+                   server.IndexOf('.', StringComparison.OrdinalIgnoreCase) == -1;
+            }
+            if(IPAddress.TryParse(server, out var ip))
+            {
+                return ip.IsLocal() || ip.IsRFC1918();
+            }
+            return false;
+        }
+
+        public static bool IsOnion(this HttpRequest request)
+        {
+            if (request?.Host.Host == null)
+                return false;
+            return request.Host.Host.EndsWith(".onion", StringComparison.OrdinalIgnoreCase);
+        }
+
         public static string GetAbsoluteRoot(this HttpRequest request)
         {
             return string.Concat(
@@ -137,12 +206,96 @@ namespace BTCPayServer
                         request.PathBase.ToUriComponent());
         }
 
+        public static Uri GetAbsoluteRootUri(this HttpRequest request)
+        {
+            return new Uri(request.GetAbsoluteRoot());
+        }
+
+        public static string GetCurrentUrl(this HttpRequest request)
+        {
+            return string.Concat(
+                        request.Scheme,
+                        "://",
+                        request.Host.ToUriComponent(),
+                        request.PathBase.ToUriComponent(),
+                        request.Path.ToUriComponent());
+        }
+
+        public static string GetCurrentPath(this HttpRequest request)
+        {
+            return string.Concat(
+                        request.PathBase.ToUriComponent(),
+                        request.Path.ToUriComponent());
+        }
+
+        /// <summary>
+        /// If 'toto' and RootPath is 'rootpath' returns '/rootpath/toto'
+        /// If 'toto' and RootPath is empty returns '/toto'
+        /// </summary>
+        /// <param name="request"></param>
+        /// <param name="path"></param>
+        /// <returns></returns>
+        public static string GetRelativePath(this HttpRequest request, string path)
+        {
+            if (path.Length > 0 && path[0] != '/')
+                path = $"/{path}";
+            return string.Concat(
+                        request.PathBase.ToUriComponent(),
+                        path);
+        }
+
+        /// <summary>
+        /// If 'https://example.com/toto' returns 'https://example.com/toto'
+        /// If 'toto' and RootPath is 'rootpath' returns '/rootpath/toto'
+        /// If 'toto' and RootPath is empty returns '/toto'
+        /// </summary>
+        /// <param name="request"></param>
+        /// <param name="path"></param>
+        /// <returns></returns>
+        public static string GetRelativePathOrAbsolute(this HttpRequest request, string path)
+        {
+            if (!Uri.TryCreate(path, UriKind.RelativeOrAbsolute, out var uri) || 
+                uri.IsAbsoluteUri)
+                return path;
+
+            if (path.Length > 0 && path[0] != '/')
+                path = $"/{path}";
+            return string.Concat(
+                        request.PathBase.ToUriComponent(),
+                        path);
+        }
+
         public static string GetAbsoluteUri(this HttpRequest request, string redirectUrl)
         {
             bool isRelative =
                 (redirectUrl.Length > 0 && redirectUrl[0] == '/')
                 || !new Uri(redirectUrl, UriKind.RelativeOrAbsolute).IsAbsoluteUri;
             return isRelative ? request.GetAbsoluteRoot() + redirectUrl : redirectUrl;
+        }
+
+        /// <summary>
+        /// Will return an absolute URL. 
+        /// If `relativeOrAsbolute` is absolute, returns it.
+        /// If `relativeOrAsbolute` is relative, send absolute url based on the HOST of this request (without PathBase)
+        /// </summary>
+        /// <param name="request"></param>
+        /// <param name="relativeOrAbsolte"></param>
+        /// <returns></returns>
+        public static Uri GetAbsoluteUriNoPathBase(this HttpRequest request, Uri relativeOrAbsolute = null)
+        {
+            if (relativeOrAbsolute == null)
+            {
+                return new Uri(string.Concat(
+                    request.Scheme,
+                    "://",
+                    request.Host.ToUriComponent()), UriKind.Absolute);
+            }
+            if (relativeOrAbsolute.IsAbsoluteUri)
+                return relativeOrAbsolute;
+            return new Uri(string.Concat(
+                    request.Scheme,
+                    "://",
+                    request.Host.ToUriComponent()) + relativeOrAbsolute.ToString().WithStartingSlash(), UriKind.Absolute);
         }
 
         public static IServiceCollection ConfigureBTCPayServer(this IServiceCollection services, IConfiguration conf)
@@ -169,13 +322,6 @@ namespace BTCPayServer
             NBitcoin.Extensions.TryAdd(ctx.Items, "IsBitpayAPI", value);
         }
 
-        public static void AddRange<T>(this HashSet<T> hashSet, IEnumerable<T> items)
-        {
-            foreach (var item in items)
-            {
-                hashSet.Add(item);
-            }
-        }
         public static bool GetIsBitpayAPI(this HttpContext ctx)
         {
             return ctx.Items.TryGetValue("IsBitpayAPI", out object obj) &&
@@ -187,34 +333,15 @@ namespace BTCPayServer
             NBitcoin.Extensions.TryAdd(ctx.Items, "BitpayAuth", value);
         }
 
-        public static async Task<T> WithCancellation<T>(this Task<T> task, CancellationToken cancellationToken)
+        public static bool TryGetBitpayAuth(this HttpContext ctx, out (string Signature, String Id, String Authorization) result)
         {
-            using (var delayCTS = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            if (ctx.Items.TryGetValue("BitpayAuth", out object obj))
             {
-                var waiting = Task.Delay(-1, delayCTS.Token);
-                var doing = task;
-                await Task.WhenAny(waiting, doing);
-                delayCTS.Cancel();
-                cancellationToken.ThrowIfCancellationRequested();
-                return await doing;
+                result = ((string Signature, String Id, String Authorization))obj;
+                return true;
             }
-        }
-        public static async Task WithCancellation(this Task task, CancellationToken cancellationToken)
-        {
-            using (var delayCTS = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-            {
-                var waiting = Task.Delay(-1, delayCTS.Token);
-                var doing = task;
-                await Task.WhenAny(waiting, doing);
-                delayCTS.Cancel();
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-        }
-
-        public static (string Signature, String Id, String Authorization) GetBitpayAuth(this HttpContext ctx)
-        {
-            ctx.Items.TryGetValue("BitpayAuth", out object obj);
-            return ((string Signature, String Id, String Authorization))obj;
+            result = default;
+            return false;
         }
 
         public static StoreData GetStoreData(this HttpContext ctx)
@@ -231,6 +358,16 @@ namespace BTCPayServer
         {
             var res = JsonConvert.SerializeObject(o, Formatting.None, jsonSettings);
             return res;
+        }
+        
+        public static string TrimEnd(this string input, string suffixToRemove,
+            StringComparison comparisonType) {
+
+            if (input != null && suffixToRemove != null
+                              && input.EndsWith(suffixToRemove, comparisonType)) {
+                return input.Substring(0, input.Length - suffixToRemove.Length);
+            }
+            else return input;
         }
     }
 }
