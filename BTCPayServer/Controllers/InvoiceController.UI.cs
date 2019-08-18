@@ -129,6 +129,9 @@ namespace BTCPayServer.Controllers
                         m.Confirmations = confirmationCount.ToString(CultureInfo.InvariantCulture);
                     }
 
+                    if (m.Crypto == "DASH")
+                        m.Confirmations += " (InstantSend confirmed)";
+
                     m.TransactionId = onChainPaymentData.Outpoint.Hash.ToString();
                     m.ReceivedTime = payment.ReceivedTime;
                     m.TransactionLink = string.Format(CultureInfo.InvariantCulture, payment.Network.BlockExplorerLink, m.TransactionId);

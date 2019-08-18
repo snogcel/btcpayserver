@@ -9,8 +9,10 @@ using BTCPayServer.Logging;
 using System.Threading;
 using Microsoft.Extensions.Hosting;
 using System.Collections.Concurrent;
+using System.Net.Http;
 using BTCPayServer.Events;
 using BTCPayServer.Services.Invoices;
+using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.HostedServices
 {
@@ -321,6 +323,8 @@ namespace BTCPayServer.HostedServices
                         {
                             var transactionResult = await _ExplorerClientProvider.GetExplorerClient(payment.GetCryptoCode())?.GetTransactionAsync(onChainPaymentData.Outpoint.Hash);
                             var confirmationCount = transactionResult?.Confirmations ?? 0;
+                            if (onChainPaymentData.Network.CryptoCode == "DASH" && confirmationCount == 0 && transactionResult != null)
+                                confirmationCount = await GetDashInsightExplorerTxLock(onChainPaymentData.Outpoint.Hash) ? 6 : 0;
                             onChainPaymentData.ConfirmationCount = confirmationCount;
                             payment.SetCryptoPaymentData(onChainPaymentData);
 
@@ -342,6 +346,33 @@ namespace BTCPayServer.HostedServices
             }
 
             return extendInvoiceMonitoring;
+        }
+
+        private static async Task<bool> GetDashInsightExplorerTxLock(uint256 txId)
+        {
+            try
+            {
+                var client = new HttpClient
+                {
+                    BaseAddress = new Uri("https://insight.dash.org/insight-api/tx/")
+                };
+                var apiResponse = await client.GetAsync(txId.ToString());
+                if (apiResponse.IsSuccessStatusCode)
+                    return await DoesContainTxLockTrue(apiResponse);
+                return false;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("Failed to check for Dash txlock for " + txId + ": " +
+                    e.Message);
+                return false;
+            }
+        }
+
+        private static async Task<bool> DoesContainTxLockTrue(HttpResponseMessage apiResponse)
+        {
+            string json = await apiResponse.Content.ReadAsStringAsync();
+            return !string.IsNullOrEmpty(json) && json.Contains("\"txlock\":true", StringComparison.InvariantCulture);
         }
 
         public async Task StopAsync(CancellationToken cancellationToken)

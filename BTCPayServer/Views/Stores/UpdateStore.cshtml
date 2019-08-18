@@ -78,7 +78,7 @@
                 <a href="https://docs.btcpayserver.org/faq-and-common-issues/faq-stores#consider-the-invoice-confirmed-when-the-payment-transaction" target="_blank"><span class="fa fa-question-circle-o" title="More information..."></span></a>
                 <select asp-for="SpeedPolicy" class="form-control">
                     <option value="0">Is unconfirmed</option>
-                    <option value="1">Has at least 1 confirmation</option>
+                    <option value="1">Has at least 1 confirmation (or is InstantSend confirmed)</option>
                     <option value="3">Has at least 2 confirmations</option>
                     <option value="2">Has at least 6 confirmations</option>
                 </select>
